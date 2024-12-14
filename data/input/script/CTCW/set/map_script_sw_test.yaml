@@ -1,0 +1,8 @@
+# Test Sciprt and SwTC mapping File
+# Cmm or Py Name: SwTC Number
+ 
+SwTC_1: 1
+SwTC_20: 20
+SwTC_TempByCCU: 100
+SwTC_TempByIVI: 101
+

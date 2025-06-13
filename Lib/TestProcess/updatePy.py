@@ -8,7 +8,7 @@ from Lib.Common import load_csv_list, to_raw, find_str_inx, load_pkl_list
 
 MASK_FIRST_BIT = 1
 MASK_SECOND_BIT = 2
-T32_USE_ALL_lINE = 3
+T32_USE_ALL = 3
 
 
 class UpdatePy:
@@ -90,7 +90,6 @@ for i in tqdm(input_data,
               leave=True,  # True 반복문 완료시 진행률 출력 남김. False 남기지 않음.
               colour='green'  # Bar 색
               ):
-    # T32 Stop if use
     if i[2] == 255:
         log_th.step = int(i[0])
         i[2] = None
@@ -114,7 +113,6 @@ for i in tqdm(input_data,
     else:
 {write_msg}
 
-    # T32 Resume if use
     log_th.step = int(i[0])
     log_th.in_data = i[2:]
 
@@ -177,10 +175,6 @@ export_csv_list(OUTPUT_PATH, title[0], outcome)
         if 'Total' in time_type:
             py_code = py_code.replace('time.sleep(i[1])',
                                       'while elapsed_time < i[1]:  # Timeout\n         elapsed_time = time.time() - start_time  # Total Time 방식')  # Total time 방식 적용
-
-        if t32_usage == T32_USE_ALL_lINE:
-            py_code = py_code.replace('# T32 Stop if use', 't32.rx.stop_log()\n    time.sleep(0.003)')  # t32 logging stop
-            py_code = py_code.replace('# T32 Resume if use', 't32.rx.resume()')  # t32 logging resume
 
         if fill_zero is False:
             py_code = py_code.replace('fill_zero=True', 'fill_zero=False')  # No Fill Zero 적용

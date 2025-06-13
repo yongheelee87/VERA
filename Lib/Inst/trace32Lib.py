@@ -1,5 +1,6 @@
 import os
 import time  # time module
+import queue
 from threading import Thread
 import lauterbach.trace32.rcl as trace32
 from lauterbach.trace32.rcl import CommandError
@@ -20,6 +21,8 @@ class Trace32:
 
         self.device = None  # Trace device 선언
         self.status = False  # status 선언
+        self.command_queue = queue.Queue()
+        self.response_queue = queue.Queue()
 
         if 'TRACE32' in self.config:
             self.connect_dev()  # 연결 시도
@@ -32,9 +35,9 @@ class Trace32:
                     '''
                     self.wait_until_connect(timeout=12)  # Auto copnnectin 7초를 넘는 충분한 시간 할당
                     
-            # Measure Data Thread 설정
-            self.rx = T32RXThread(dev=self.device)  # TRACE32 RX 시그널 Thread 설정
-            self.rx.start()  # TRACE32 RX 시그널 THREAD 동작
+            # Data Thread 설정
+            thread = Thread(target=self.rcl_worker, daemon=True)
+            thread.start()  # TRACE32 worker 동작
 
     def connect_dev(self):
         """
@@ -121,15 +124,16 @@ class Trace32:
         :param value: input value
         """
         if value is not None:
-            self.device.variable.write(symbol, value)
+            self.command_queue.put((0x02, (symbol, value)))
 
     def read_symbol(self, symbol: str):
         """
         :param symbol: variable name loaded by elf
         :return: only value, not array and structure
         """
-        variable = self.device.variable.read(symbol)
-        return str(variable.value)
+        self.command_queue.put((0x01, symbol))
+        result = self.response_queue.get(timeout=0.2)
+        return result
 
     def read_symbol_arr(self, symbol: str):
         """
@@ -178,51 +182,16 @@ class Trace32:
     def enable_break(self, name):
         return self.device.breakpoint.enable(address=self.device.symbol.query_by_name(name=name).address)
 
-    def msg_init(self):
-        self.rx.msg_dict.clear()  # 메세지 초기화
-
-    def get_symbol_data(self, sym: str) -> int:
-        """
-        :param sym: symbol variable
-        :return: t32 symbol data from dict
-        """
-        ret_data = None
-        if sym in self.rx.msg_dict:  # 데이터 저장이 되어 있을 경우
-            ret_data = int(self.rx.msg_dict[sym])
-        return ret_data
-
     def re_init(self):
-        self.rx.stop_log()
         time.sleep(0.5)
         self.reset_go()
-        self.rx.msg_dict = {}  # 메세지 초기화
-        self.rx.resume()
 
-
-class T32RXThread(Thread):
-    """ T32RXThread(parent: Thread) """
-
-    def __init__(self, dev):
-        super().__init__()
-        self.dev = dev
-        self.vars = []
-        self.update_flag = False
-        self.msg_dict = {}
-
-    def run(self):
+    def rcl_worker(self):
         while True:
-            if self.update_flag is True:
-                for var in self.vars:  # for문이 비워 있을때는 실행 안함
-                    try:
-                        self.msg_dict[var] = self.dev.variable.read(var).value
-                    except ConnectionError:
-                        pass
-            time.sleep(0.0008)
-
-    def stop_log(self):
-        self.update_flag = False
-
-    def resume(self):
-        self.update_flag = True
-
+            command, args = self.command_queue.get()
+            if command == 0x01:  # read
+                self.response_queue.put(self.device.variable.read(args).value)
+            elif command == 0x02:  # write
+                self.device.variable.write(args[0], args[1])
+            self.command_queue.task_done()
 # This is a new line that ends the file

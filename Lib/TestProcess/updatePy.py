@@ -1,18 +1,144 @@
-from itertools import groupby
 import os
+from itertools import groupby
+from typing import List, Tuple, Any, Optional, Union
+from dataclasses import dataclass, field
+from enum import IntFlag, Enum
+from pathlib import Path
 import pandas as pd
 import numpy as np
 from Lib.Inst import canBus
 from Lib.Common import load_csv_list, to_raw, find_str_inx, load_pkl_list
 
 
-MASK_FIRST_BIT = 1
-MASK_SECOND_BIT = 2
-T32_USE_ALL = 3
+class DeviceType(Enum):
+    """Device type enumeration"""
+    CAN = "CAN"
+    LIN = "LIN"
+    T32 = "T32"
 
 
-class UpdatePy:
-    tc_head_body = """
+class MessageType(Enum):
+    """Message type enumeration"""
+    EVENT = "Event"
+    PERIOD = "Period"
+
+
+class FrameType(Enum):
+    """Frame type enumeration"""
+    NORMAL = "Normal"
+    EXTENDED = "Extended"
+
+
+class TimeType(Enum):
+    """Time type enumeration"""
+    DELTA = "Delta"
+    TOTAL = "Total"
+
+
+class T32Usage(IntFlag):
+    """T32 usage flags"""
+    NONE = 0
+    OUTPUT = 1
+    INPUT = 2
+    ALL = 3
+
+
+class UpdatePyConstants:
+    """Constants for UpdatePy class"""
+    # File extensions
+    PY_EXT = '.py'
+    CSV_EXT = '.csv'
+    PKL_EXT = '.pkl'
+
+    # Special command codes
+    RESET_CODE = 255
+    CAN_STOP_CODE = 254
+    FLASH_CODE = 253
+
+    # Signal prefixes and suffixes
+    OUTPUT_PREFIX = '[OUT]'
+    EVENT_MARKER = '_E_'
+    TIME_SUFFIX = 'ms'
+
+    # Default values
+    DEFAULT_TIMEOUT = 0.2
+    DEFAULT_SAMPLE_RATE = 0.01
+    DEFAULT_PERIOD = 0.02
+    EXTENDED_ID_THRESHOLD = 0xFFFF
+
+    # Column indices
+    STEP_COL_INDEX = 0
+    TIME_COL_INDEX = 1
+    SIGNAL_START_INDEX = 2
+
+    # Template markers
+    USE_DB_INTERFACE = '# USE DB INTERFACE'
+    DATA_BEGIN = '# Data Begin'
+    DATA_END = '# Data End'
+    DEV_SIGNAL_BEGIN = '# Dev signal List Begin'
+    DEV_SIGNAL_END = '# Dev signal List End'
+    LOG_THREAD_BEGIN = '# LogThread Begin'
+    LOG_THREAD_END = '# LogThread End'
+    DEV_INPUT_BEGIN = '# Dev Input Begin'
+    DEV_INPUT_END = '# Dev Input End'
+    TC_MAIN_BEGIN = '# TC main Begin'
+    TC_MAIN_END = '# TC main End'
+
+
+@dataclass
+class SignalInfo:
+    """Signal information data class"""
+    device: str
+    frame: str
+    signal: str
+    frame_type: str = FrameType.NORMAL.value
+    message_type: str = MessageType.PERIOD.value
+    timeout: float = UpdatePyConstants.DEFAULT_TIMEOUT
+    symbol: str = ""
+
+
+@dataclass
+class TestData:
+    """Test data container"""
+    input_data: List[List[Any]] = field(default_factory=list)
+    expected_data: List[List[Any]] = field(default_factory=list)
+    input_signals: List[SignalInfo] = field(default_factory=list)
+    output_signals: List[SignalInfo] = field(default_factory=list)
+    all_signals: List[List[str]] = field(default_factory=list)
+
+
+@dataclass
+class TestConfig:
+    """Test configuration data class"""
+    sample_rate: float = UpdatePyConstants.DEFAULT_SAMPLE_RATE
+    time_type: str = TimeType.DELTA.value
+    judge_type: str = "same"
+    num_match: int = 0
+    fill_zero: bool = True
+
+
+class UpdatePyError(Exception):
+    """Custom exception for UpdatePy errors"""
+    pass
+
+
+class TemplateError(UpdatePyError):
+    """Custom exception for template errors"""
+    pass
+
+
+class SignalProcessingError(UpdatePyError):
+    """Custom exception for signal processing errors"""
+    pass
+
+
+class CodeTemplates:
+    """Code templates for test generation"""
+
+    @staticmethod
+    def get_header_template() -> str:
+        """Get the main header template"""
+        return '''
 # USE DB INTERFACE
 import pandas as pd
 import numpy as np
@@ -43,9 +169,12 @@ outcome.append(total_col)
 
 # TC main Begin
 # TC main End
-"""
+'''
 
-    log_thread_body = """
+    @staticmethod
+    def get_log_thread_template() -> str:
+        """Get the log thread template"""
+        return '''
 class LogThread(Thread):
     def __init__(self, can_bus):
         super().__init__()
@@ -65,15 +194,16 @@ class LogThread(Thread):
                 elapsed = round((time.time() - self.start_test), 2)
                 self.log_lst.append([self.step, elapsed] + self.in_data + out_data)
             time.sleep(self.sample_rate)
-"""
+'''
 
-    tc_main_body = """
+    @staticmethod
+    def get_main_template() -> str:
+        """Get the main test template"""
+        return '''
 # Initialize all variables
 canBus.stop_all_period_msg()
 
-t32.rx.vars = lst_t32_out  # define T32 rx variable
-
-t32.re_init()
+t32.reinitialize()
 time.sleep(0.5)
 
 # Measure Data Thread 설정
@@ -96,7 +226,7 @@ for i in tqdm(input_data,
         log_th.in_data = i[2:]
 
         canBus.stop_all_period_msg()
-        t32.re_init()
+        t32.reinitialize()
     elif i[2] == 254:
         log_th.step = int(i[0])
         i[2] = None
@@ -132,210 +262,560 @@ NUM_OF_MATCH = 0  # define criteria for matching rows
 outcome = judge_final_result(df_result=df_log[['Step'] + out_col], expected_outs=expected_data, num_match=NUM_OF_MATCH, meas_log=outcome.copy(), out_col=out_col, judge=JUDGE_TYPE)
 
 export_csv_list(OUTPUT_PATH, title[0], outcome)
-"""
+'''
+
+
+class SignalProcessor:
+    """Signal processing utilities"""
+
+    @staticmethod
+    def parse_signal_info(column_name: str) -> SignalInfo:
+        """
+        Parse signal information from column name
+
+        Args:
+            column_name: Column name containing signal information
+
+        Returns:
+            SignalInfo object
+        """
+        try:
+            # Clean and split the column name
+            clean_name = column_name.replace(UpdatePyConstants.OUTPUT_PREFIX, '').strip()
+            parts = [part.strip() for part in clean_name.split(', ')]
+
+            if len(parts) < 2:
+                raise SignalProcessingError(f"Invalid signal format: {column_name}")
+
+            signal_info = SignalInfo(
+                device=parts[0],
+                frame=parts[1] if len(parts) > 1 else "",
+                signal=parts[2] if len(parts) > 2 else parts[1]
+            )
+
+            # Process additional signal properties
+            if signal_info.device in [DeviceType.LIN.value, DeviceType.T32.value]:
+                signal_info.symbol = parts[-1] if len(parts) > 2 else parts[1]
+                signal_info.frame = ""
+            else:
+                SignalProcessor._process_can_signal_properties(signal_info)
+
+            return signal_info
+
+        except Exception as e:
+            raise SignalProcessingError(f"Failed to parse signal info from '{column_name}': {e}")
+
+    @staticmethod
+    def _process_can_signal_properties(signal_info: SignalInfo):
+        """Process CAN signal specific properties"""
+        if signal_info.device in [DeviceType.LIN.value, DeviceType.T32.value]:
+            return
+
+        try:
+            # Determine frame type based on message ID
+            msg_id = canBus.devs[signal_info.device].get_msg_id(signal_info.frame)
+            signal_info.frame_type = (FrameType.EXTENDED.value
+                                      if msg_id > UpdatePyConstants.EXTENDED_ID_THRESHOLD
+                                      else FrameType.NORMAL.value)
+
+            # Determine message type and timeout based on frame name
+            if UpdatePyConstants.EVENT_MARKER in signal_info.frame:
+                signal_info.message_type = MessageType.EVENT.value
+                signal_info.timeout = UpdatePyConstants.DEFAULT_TIMEOUT
+            else:
+                # Extract period from frame name
+                for part in signal_info.frame.split('_'):
+                    if UpdatePyConstants.TIME_SUFFIX in part:
+                        period_ms = int(part.replace(UpdatePyConstants.TIME_SUFFIX, ''))
+                        if period_ms <= 0:
+                            signal_info.message_type = MessageType.EVENT.value
+                            signal_info.timeout = UpdatePyConstants.DEFAULT_TIMEOUT
+                        else:
+                            signal_info.message_type = MessageType.PERIOD.value
+                            signal_info.timeout = float(period_ms) / 1000
+                        break
+                else:
+                    # Default to period if no timing info found
+                    signal_info.message_type = MessageType.PERIOD.value
+                    signal_info.timeout = UpdatePyConstants.DEFAULT_PERIOD
+
+        except Exception as e:
+            print(f"Warning: Failed to process CAN signal properties for {signal_info.device}: {e}")
+            # Set safe defaults
+            signal_info.frame_type = FrameType.NORMAL.value
+            signal_info.message_type = MessageType.PERIOD.value
+            signal_info.timeout = UpdatePyConstants.DEFAULT_PERIOD
+
+
+class UpdatePy:
+    """
+    Optimized UpdatePy class for test script generation and management
+    """
 
     def __init__(self):
+        """Initialize UpdatePy with default settings"""
         self.py_path = ''
         self.py_title = ''
         self.py_sub_title = ''
         self.py_output_path = ''
         self.db_interface = False
-        self.in_out_sigs = []
+        self.in_out_sigs: List[List[str]] = []
+        self.templates = CodeTemplates()
 
-    def update_py(self) -> (str, pd.DataFrame):
-        codes = self._parse_script_py()
-        df_tc_raw = None
-        if self.db_interface is True:
-            lst_df = load_csv_list(file_path=self.py_path.replace('.py', '.csv'))
-            self.py_sub_title = lst_df[0][1]  # 기존 csv파일 이름 제외 별도 이름
-            # lst_df = load_pkl_list(file_path=self.py_path.replace('.py', '.pkl'))
-            codes, df_tc_raw = self.fill_variables(df=pd.DataFrame(lst_df[7:], columns=lst_df[6]), py_code=codes, rate=lst_df[1][1], time_type=lst_df[2][1], judge=lst_df[3][1], n_match=lst_df[4][1])
-        else:
-            self.py_sub_title = os.path.basename(self.py_path).replace('.py', '')
-        return codes, df_tc_raw
+    def update_py(self) -> Tuple[str, Optional[pd.DataFrame]]:
+        """
+        Update Python test script with optimized error handling
 
-    def fill_variables(self, df: pd.DataFrame, py_code: str, rate: str, time_type: str, judge: str, n_match: str, fill_zero: bool = True) -> (str, pd.DataFrame):
-        df_tc = df.drop(['Scenario'], axis=1).apply(pd.to_numeric) if 'Scenario' in df.columns else df.apply(pd.to_numeric)
-        in_col, out_col, inputs, outputs, total, t32_usage = self._get_msg_in_out(cols=df_tc.columns)
-        self.in_out_sigs = [in_col[2:], out_col[1:]]
-        in_data = str(df_tc[in_col].to_numpy().tolist()).replace('nan', 'None')
-        out_data = str(df_tc[out_col].to_numpy().tolist()).replace('nan', 'None')
-        lst_condition = [['# Data Begin', '# Data End', f'input_data = {in_data}\nexpected_data = {out_data}'],
-                         ['# Dev signal List Begin', '# Dev signal List End',
-                          f'dev_in_sigs = {str(inputs)}\ndev_out_sigs = {str(outputs)}\ndev_all_sigs = {str(total)}'],
-                         ['# LogThread Begin', '# LogThread End',
-                          self.log_thread_body.format(len_in=len(in_col) - 2, sample_rate=rate, read_msg=self._get_msg_read(outputs))]]
-        if '# Dev Input Begin' in py_code:
-            lst_condition.append(['# Dev Input Begin', '# Dev Input End', self._get_msg_write(inputs)])
-        else:
-            lst_condition.append(['# TC main Begin', '# TC main End', self.tc_main_body.format(write_msg=self._get_msg_write_frame(inputs))])
+        Returns:
+            Tuple of (generated_code, test_case_dataframe)
+        """
+        try:
+            # Parse the script file
+            code = self._parse_script_file()
+            df_test_case = None
 
-        py_code = self._apply_db_to_code(lines=py_code, conditions=lst_condition)
+            if self.db_interface:
+                df_test_case = self._process_database_interface(code)
+                code = df_test_case[0]  # Updated code
+                df_test_case = df_test_case[1]  # DataFrame
+            else:
+                self.py_sub_title = Path(self.py_path).stem
 
-        if 'Total' in time_type:
-            py_code = py_code.replace('time.sleep(i[1])',
-                                      'while elapsed_time < i[1]:  # Timeout\n         elapsed_time = time.time() - start_time  # Total Time 방식')  # Total time 방식 적용
+            return code, df_test_case
 
-        if fill_zero is False:
-            py_code = py_code.replace('fill_zero=True', 'fill_zero=False')  # No Fill Zero 적용
-        py_code = py_code.replace('JUDGE_TYPE = "same"', f'JUDGE_TYPE = "{judge}"')  # judge type 적용
-        py_code = py_code.replace('NUM_OF_MATCH = 0', f'NUM_OF_MATCH = {n_match}')  # match 갯수 적용
-        df = df.replace('254', 'CAN Stop').replace('255', 'Reset')
-        return py_code, df
+        except Exception as e:
+            print(f"Error updating Python script: {e}")
+            raise UpdatePyError(f"Failed to update Python script: {e}")
 
-    def _parse_script_py(self) -> str:
+    def _parse_script_file(self) -> str:
+        """
+        Parse script file and determine interface type
+
+        Returns:
+            Script content as string
+        """
         self.db_interface = False
-        if os.path.isfile(self.py_path) is True:
-            with open(to_raw(self.py_path), "r+", encoding='utf-8') as file:
-                lines = file.readlines()
-        else:
-            lines = self.tc_head_body.splitlines(True)[1:]
 
-        if '# USE DB INTERFACE' in lines[0]:
+        if os.path.isfile(self.py_path):
+            try:
+                with open(to_raw(self.py_path), "r+", encoding='utf-8') as file:
+                    lines = file.readlines()
+            except Exception as e:
+                raise UpdatePyError(f"Failed to read script file {self.py_path}: {e}")
+        else:
+            # Use default template if file doesn't exist
+            lines = self.templates.get_header_template().splitlines(True)[1:]
+
+        # Check if using database interface
+        if lines and UpdatePyConstants.USE_DB_INTERFACE in lines[0]:
             self.db_interface = True
 
-        return self._fill_header(lines)
+        return self._fill_header_variables(lines)
 
-    def _apply_db_to_code(self, lines: str, conditions: list) -> str:
-        for str_con in conditions:
-            if str_con[0] in lines:
-                s_inx, e_inx = find_str_inx(lines, start_str=str_con[0], end_str=str_con[1])
-                lines = lines.replace(lines[s_inx:e_inx], str_con[2])
-        return lines
+    def _process_database_interface(self, code: str) -> Tuple[str, Optional[pd.DataFrame]]:
+        """
+        Process database interface and generate code
 
-    def _fill_header(self, lines: list) -> str:
-        new_lines = []
+        Args:
+            code: Base code template
+
+        Returns:
+            Tuple of (updated_code, test_dataframe)
+        """
+        try:
+            # Load CSV data
+            csv_path = self.py_path.replace(UpdatePyConstants.PY_EXT, UpdatePyConstants.CSV_EXT)
+            csv_data = load_csv_list(file_path=csv_path)
+
+            if len(csv_data) < 8:
+                raise UpdatePyError(f"Invalid CSV format in {csv_path}")
+
+            # Extract configuration from CSV
+            self.py_sub_title = csv_data[0][1]
+            config = TestConfig(
+                sample_rate=float(csv_data[1][1]),
+                time_type=csv_data[2][1],
+                judge_type=csv_data[3][1],
+                num_match=int(csv_data[4][1])
+            )
+
+            # Create DataFrame from test data
+            df_test_case = pd.DataFrame(csv_data[7:], columns=csv_data[6])
+
+            # Generate code with variables filled
+            updated_code, processed_df = self._fill_variables(
+                df=df_test_case,
+                py_code=code,
+                config=config
+            )
+
+            return updated_code, processed_df
+
+        except Exception as e:
+            raise UpdatePyError(f"Failed to process database interface: {e}")
+
+    def _fill_variables(self, df: pd.DataFrame, py_code: str, config: TestConfig) -> Tuple[str, pd.DataFrame]:
+        """
+        Fill template variables with test data
+
+        Args:
+            df: Test case DataFrame
+            py_code: Template code
+            config: Test configuration
+
+        Returns:
+            Tuple of (filled_code, processed_dataframe)
+        """
+        try:
+            # Clean DataFrame
+            clean_df = self._clean_dataframe(df)
+
+            # Process signals and generate test data
+            test_data = self._process_signals_and_data(clean_df)
+
+            # Prepare code replacements
+            replacements = self._prepare_code_replacements(test_data, config)
+
+            # Apply replacements to code
+            updated_code = self._apply_replacements(py_code, replacements)
+
+            # Apply additional configurations
+            updated_code = self._apply_config_modifications(updated_code, config)
+
+            # Process DataFrame for output
+            processed_df = self._process_dataframe_for_output(df)
+
+            return updated_code, processed_df
+
+        except Exception as e:
+            raise UpdatePyError(f"Failed to fill variables: {e}")
+
+    def _clean_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Clean and prepare DataFrame"""
+        # Remove scenario column if present and convert to numeric
+        if 'Scenario' in df.columns:
+            clean_df = df.drop(['Scenario'], axis=1).apply(pd.to_numeric, errors='coerce')
+        else:
+            clean_df = df.apply(pd.to_numeric, errors='coerce')
+
+        return clean_df
+
+    def _process_signals_and_data(self, df: pd.DataFrame) -> TestData:
+        """
+        Process signals and extract test data
+
+        Args:
+            df: Clean DataFrame
+
+        Returns:
+            TestData object with processed information
+        """
+        columns = df.columns.values
+
+        # Separate input and output columns
+        input_cols, output_cols = self._separate_input_output_columns(columns)
+
+        # Store signal information for external use
+        self.in_out_sigs = [input_cols[2:], output_cols[1:]]
+
+        # Process signal information
+        input_signals, output_signals, all_signals, t32_usage = self._process_signal_information(columns)
+
+        # Extract data arrays
+        input_data = df[input_cols].to_numpy().tolist()
+        output_data = df[output_cols].to_numpy().tolist()
+
+        # Replace NaN with None for JSON serialization
+        input_data = self._replace_nan_with_none(input_data)
+        output_data = self._replace_nan_with_none(output_data)
+
+        return TestData(
+            input_data=input_data,
+            expected_data=output_data,
+            input_signals=input_signals,
+            output_signals=output_signals,
+            all_signals=all_signals
+        )
+
+    def _separate_input_output_columns(self, columns: np.ndarray) -> Tuple[List[str], List[str]]:
+        """Separate input and output columns"""
+        input_cols = columns[:UpdatePyConstants.SIGNAL_START_INDEX].tolist()  # Step, Time
+        output_cols = columns[:1].tolist()  # Step only
+
+        for col in columns[UpdatePyConstants.SIGNAL_START_INDEX:]:
+            if UpdatePyConstants.OUTPUT_PREFIX in col:
+                output_cols.append(col)
+            else:
+                input_cols.append(col)
+
+        return input_cols, output_cols
+
+    def _process_signal_information(self, columns: np.ndarray) -> Tuple[
+        List[SignalInfo], List[SignalInfo], List[List[str]], int]:
+        """Process signal information from column names"""
+        input_signals = []
+        output_signals = []
+        t32_usage = T32Usage.NONE
+
+        for col in columns[UpdatePyConstants.SIGNAL_START_INDEX:]:
+            try:
+                signal_info = SignalProcessor.parse_signal_info(col)
+
+                if UpdatePyConstants.OUTPUT_PREFIX in col:
+                    output_signals.append(signal_info)
+                    if signal_info.device == DeviceType.T32.value:
+                        t32_usage |= T32Usage.OUTPUT
+                else:
+                    input_signals.append(signal_info)
+                    if signal_info.device == DeviceType.T32.value:
+                        t32_usage |= T32Usage.INPUT
+
+            except SignalProcessingError as e:
+                print(f"Warning: Skipping invalid signal column '{col}': {e}")
+                continue
+
+        # Create combined signal list for plotting
+        all_signals = [[sig.device, sig.frame, sig.signal] for sig in input_signals + output_signals]
+
+        return input_signals, output_signals, all_signals, int(t32_usage)
+
+    def _replace_nan_with_none(self, data: List[List[Any]]) -> List[List[Any]]:
+        """Replace NaN values with None for better JSON serialization"""
+        return [[None if pd.isna(item) else item for item in row] for row in data]
+
+    def _prepare_code_replacements(self, test_data: TestData, config: TestConfig) -> List[Tuple[str, str, str]]:
+        """Prepare code replacement tuples"""
+        # Convert data to string representation
+        input_data_str = str(test_data.input_data).replace('nan', 'None')
+        output_data_str = str(test_data.expected_data).replace('nan', 'None')
+
+        # Convert signals to string representation
+        input_sigs_str = str([list(sig.__dict__.values()) for sig in test_data.input_signals])
+        output_sigs_str = str([list(sig.__dict__.values()) for sig in test_data.output_signals])
+        all_sigs_str = str(test_data.all_signals)
+
+        replacements = [
+            (
+                UpdatePyConstants.DATA_BEGIN,
+                UpdatePyConstants.DATA_END,
+                f'input_data = {input_data_str}\nexpected_data = {output_data_str}'
+            ),
+            (
+                UpdatePyConstants.DEV_SIGNAL_BEGIN,
+                UpdatePyConstants.DEV_SIGNAL_END,
+                f'dev_in_sigs = {input_sigs_str}\ndev_out_sigs = {output_sigs_str}\ndev_all_sigs = {all_sigs_str}'
+            ),
+            (
+                UpdatePyConstants.LOG_THREAD_BEGIN,
+                UpdatePyConstants.LOG_THREAD_END,
+                self._generate_log_thread_code(test_data, config)
+            )
+        ]
+
+        # Add appropriate input handling
+        if UpdatePyConstants.DEV_INPUT_BEGIN in str(test_data):  # Check if custom input handling needed
+            replacements.append((
+                UpdatePyConstants.DEV_INPUT_BEGIN,
+                UpdatePyConstants.DEV_INPUT_END,
+                self._generate_input_write_code(test_data.input_signals)
+            ))
+        else:
+            replacements.append((
+                UpdatePyConstants.TC_MAIN_BEGIN,
+                UpdatePyConstants.TC_MAIN_END,
+                self._generate_main_code_with_frame_writes(test_data.input_signals)
+            ))
+
+        return replacements
+
+    def _generate_log_thread_code(self, test_data: TestData, config: TestConfig) -> str:
+        """Generate log thread code"""
+        read_msg_code = self._generate_message_read_code(test_data.output_signals)
+
+        return self.templates.get_log_thread_template().format(
+            len_in=len([col for col in range(2)]) + len(test_data.input_signals),  # Step, Time + input signals
+            sample_rate=config.sample_rate,
+            read_msg=read_msg_code
+        )
+
+    def _generate_message_read_code(self, output_signals: List[SignalInfo]) -> str:
+        """Generate code for reading output messages"""
+        lines = []
+        used_messages = {}
+        msg_index = 0
+
+        for signal in output_signals:
+            if signal.device == DeviceType.T32.value:
+                line = f"                out_data.append(t32.read_symbol(symbol='{signal.symbol}'))"
+            else:
+                # Create message reading code
+                if signal.message_type == MessageType.EVENT.value:
+                    msg_read = f"self.can.devs['{signal.device}'].msg_read_event('{signal.frame}', decode_on=False)"
+                else:
+                    msg_read = f"self.can.devs['{signal.device}'].msg_read_name('{signal.frame}', decode_on=False)"
+
+                # Reuse message variable if same message already read
+                if msg_read in used_messages:
+                    msg_var = used_messages[msg_read]
+                    line = f"                out_data.append({msg_var}['{signal.signal}'] if {msg_var} else None)"
+                else:
+                    msg_var = f'msg_{msg_index}'
+                    used_messages[msg_read] = msg_var
+                    msg_index += 1
+
+                    line = (f"                {msg_var} = {msg_read}\n"
+                            f"                out_data.append({msg_var}['{signal.signal}'] if {msg_var} else None)")
+
+            lines.append(line)
+
+        return '\n'.join(lines)
+
+    def _generate_input_write_code(self, input_signals: List[SignalInfo]) -> str:
+        """Generate code for writing input signals individually"""
+        lines = []
+
+        for idx, signal in enumerate(input_signals, UpdatePyConstants.SIGNAL_START_INDEX):
+            if signal.device in [DeviceType.LIN.value, DeviceType.T32.value]:
+                line = f"        t32.write_symbol(symbol='{signal.symbol}', value=i[{idx}])"
+            else:
+                # CAN message write
+                extended_param = ", is_extended=True" if signal.frame_type == FrameType.EXTENDED.value else ""
+
+                if signal.message_type == MessageType.EVENT.value:
+                    line = (f"        canBus.devs['{signal.device}'].msg_write("
+                            f"'{signal.frame}', '{signal.signal}', i[{idx}], {signal.timeout}{extended_param})")
+                else:
+                    line = (f"        canBus.devs['{signal.device}'].msg_period_write("
+                            f"'{signal.frame}', '{signal.signal}', i[{idx}], {signal.timeout}{extended_param})")
+
+            lines.append(line)
+
+        return '\n'.join(lines)
+
+    def _generate_main_code_with_frame_writes(self, input_signals: List[SignalInfo]) -> str:
+        """Generate main code with frame-based writes"""
+        write_msg_code = self._generate_frame_write_code(input_signals)
+        return self.templates.get_main_template().format(write_msg=write_msg_code)
+
+    def _generate_frame_write_code(self, input_signals: List[SignalInfo]) -> str:
+        """Generate code for writing signals grouped by frame"""
+        lines = []
+        idx = UpdatePyConstants.SIGNAL_START_INDEX
+
+        # Group signals by frame
+        grouped_signals = []
+        for frame_name, signals in groupby(input_signals, lambda x: x.frame):
+            grouped_signals.append(list(signals))
+
+        for signal_group in grouped_signals:
+            if not signal_group:
+                continue
+
+            first_signal = signal_group[0]
+
+            if first_signal.device in [DeviceType.LIN.value, DeviceType.T32.value]:
+                # T32 signals are handled individually
+                line = f"        t32.write_symbol(symbol='{first_signal.symbol}', value=i[{idx}])"
+                idx += 1
+            else:
+                # CAN signals grouped by frame
+                signal_names = [sig.signal for sig in signal_group]
+                signal_values = [f"i[{idx + i}]" for i in range(len(signal_group))]
+                idx += len(signal_group)
+
+                extended_param = ", is_extended=True" if first_signal.frame_type == FrameType.EXTENDED.value else ""
+
+                if first_signal.message_type == MessageType.EVENT.value:
+                    line = (f"        canBus.devs['{first_signal.device}'].msg_write_by_frame("
+                            f"""'{first_signal.frame}', {signal_names}, {str(signal_values).replace("'", "")}, """
+                            f"{first_signal.timeout}{extended_param})")
+                else:
+                    line = (f"        canBus.devs['{first_signal.device}'].msg_period_write_by_frame("
+                            f"""'{first_signal.frame}', {signal_names}, {str(signal_values).replace("'", "")}, """
+                            f"{first_signal.timeout}{extended_param})")
+
+            lines.append(line)
+
+        return '\n'.join(lines)
+
+    def _apply_replacements(self, code: str, replacements: List[Tuple[str, str, str]]) -> str:
+        """Apply code replacements"""
+        for start_marker, end_marker, replacement in replacements:
+            if start_marker in code:
+                try:
+                    start_idx, end_idx = find_str_inx(code, start_str=start_marker, end_str=end_marker)
+                    code = code.replace(code[start_idx:end_idx], replacement)
+                except Exception as e:
+                    print(f"Warning: Failed to apply replacement for {start_marker}: {e}")
+
+        return code
+
+    def _apply_config_modifications(self, code: str, config: TestConfig) -> str:
+        """Apply configuration-specific modifications"""
+        # Apply time type modification
+        if config.time_type == TimeType.TOTAL.value:
+            code = code.replace(
+                'time.sleep(i[1])',
+                'while elapsed_time < i[1]:  # Timeout\n         elapsed_time = time.time() - start_time  # Total Time 방식'
+            )
+
+        # Apply fill zero configuration
+        if not config.fill_zero:
+            code = code.replace('fill_zero=True', 'fill_zero=False')
+
+        # Apply judge type and match number
+        code = code.replace('JUDGE_TYPE = "same"', f'JUDGE_TYPE = "{config.judge_type}"')
+        code = code.replace('NUM_OF_MATCH = 0', f'NUM_OF_MATCH = {config.num_match}')
+
+        return code
+
+    def _process_dataframe_for_output(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Process DataFrame for output (replace special codes with readable text)"""
+        processed_df = df.copy()
+        processed_df = processed_df.replace(str(UpdatePyConstants.CAN_STOP_CODE), 'CAN Stop')
+        processed_df = processed_df.replace(str(UpdatePyConstants.RESET_CODE), 'Reset')
+        processed_df = processed_df.replace(str(UpdatePyConstants.FLASH_CODE), 'Flash')
+        return processed_df
+
+    def _fill_header_variables(self, lines: List[str]) -> str:
+        """Fill header variables in template"""
+        updated_lines = []
+
         for line in lines:
             if "OUTPUT_PATH = " in line:
                 line = f"OUTPUT_PATH = r'{self.py_output_path}'\n"
             elif 'title = [' in line:
                 line = f"title = [r'{self.py_title}']\n"
-            new_lines.append(line)
-        return ''.join(new_lines)
+            updated_lines.append(line)
 
-    def _get_msg_write(self, lst_input: list) -> str:
-        lst_line = []
-        idx = 2
-        for str_in in lst_input:
-            if str_in[0] != 'LIN' and str_in[0] != 'T32':  # Only for CAN message
-                if 'Event' in str_in[4]:
-                    if 'Extended' in str_in[3]:
-                        line = f"        canBus.devs['{str_in[0]}'].msg_write('{str_in[1]}', '{str_in[2]}', i[{idx}], {str_in[-1]}, is_extended=True)"
-                    else:
-                        line = f"        canBus.devs['{str_in[0]}'].msg_write('{str_in[1]}', '{str_in[2]}', i[{idx}], {str_in[-1]})"
+        return ''.join(updated_lines)
+
+    # Utility methods for backward compatibility
+    def _get_msg_in_out(self, cols: np.ndarray) -> Tuple[
+        List[str], List[str], List[List[str]], List[List[str]], List[List[str]], int]:
+        """Backward compatibility method - kept for legacy support"""
+        print("Warning: Using deprecated _get_msg_in_out method. Consider upgrading to new signal processing.")
+
+        try:
+            test_data = self._process_signals_and_data(pd.DataFrame(columns=cols))
+
+            input_cols = cols[:UpdatePyConstants.SIGNAL_START_INDEX].tolist()
+            output_cols = cols[:1].tolist()
+
+            for col in cols[UpdatePyConstants.SIGNAL_START_INDEX:]:
+                if UpdatePyConstants.OUTPUT_PREFIX in col:
+                    output_cols.append(col)
                 else:
-                    if 'Extended' in str_in[3]:
-                        line = f"        canBus.devs['{str_in[0]}'].msg_period_write('{str_in[1]}', '{str_in[2]}', i[{idx}], {str_in[-1]}, is_extended=True)"
-                    else:
-                        line = f"        canBus.devs['{str_in[0]}'].msg_period_write('{str_in[1]}', '{str_in[2]}', i[{idx}], {str_in[-1]})"
-            else:
-                line = f"        t32.write_symbol(symbol='{str_in[-1]}', value=i[{idx}])"
-            lst_line.append(line)
-            idx += 1
-        return '\n'.join(lst_line)
+                    input_cols.append(col)
 
-    def _get_msg_write_frame(self, lst_input: list) -> str:
-        lst_line = []
-        idx = 2
+            # Convert to legacy format
+            input_legacy = [[sig.device, sig.frame, sig.signal, sig.frame_type, sig.message_type, str(sig.timeout)]
+                            for sig in test_data.input_signals]
+            output_legacy = [[sig.device, sig.frame, sig.signal, sig.message_type]
+                             for sig in test_data.output_signals]
 
-        sorted_sigs = (list(sig) for grp, sig in groupby(lst_input, lambda x: x[1]))
-        for str_in in sorted_sigs:
-            sig = []
-            val = []
-            for lst_in in str_in:
-                sig.append(lst_in[2])
-                val.append(f"i[{idx}]")
-                idx += 1
+            return input_cols, output_cols, input_legacy, output_legacy, test_data.all_signals, 0
 
-            if str_in[0][0] != 'LIN' and str_in[0][0] != 'T32':  # Only for CAN message
-                if 'Event' in str_in[0][4]:
-                    if 'Extended' in str_in[0][3]:
-                        line = f'''        canBus.devs['{str_in[0][0]}'].msg_write_by_frame('{str_in[0][1]}', {str(sig)}, {str(val).replace("'", "")}, {str_in[0][-1]}, is_extended=True)'''
-                    else:
-                        line = f'''        canBus.devs['{str_in[0][0]}'].msg_write_by_frame('{str_in[0][1]}', {str(sig)}, {str(val).replace("'", "")}, {str_in[0][-1]})'''
-                else:
-                    if 'Extended' in str_in[3]:
-                        line = f'''        canBus.devs['{str_in[0][0]}'].msg_period_write_by_frame('{str_in[0][1]}', {str(sig)}, {str(val).replace("'", "")}, {str_in[0][-1]}, is_extended=True)'''
-                    else:
-                        line = f'''        canBus.devs['{str_in[0][0]}'].msg_period_write_by_frame('{str_in[0][1]}', {str(sig)}, {str(val).replace("'", "")}, {str_in[0][-1]})'''
-            else:
-                line = f"        t32.write_symbol(symbol='{str_in[0][-1]}', value=i[{idx-1}])"
-            lst_line.append(line)
-        return '\n'.join(lst_line)
-
-    def _get_msg_in_out(self, cols: np.array) -> (list, list, list, list, list, int):
-        col_in = cols[:2].tolist()  # Step, Time
-        col_out = cols[:1].tolist()  # Step
-        lst_in = []
-        lst_out = []
-        t32_usage = 0  # Not Used
-        for col in cols[2:]:  # Signals except step,time
-            temp = [t.strip() for t in col.split(', ')]  # get dev, signal
-            if '[OUT]' in temp[0]:  # In case of Output
-                col_out.append(col)  # Insert Output variable
-                temp[0] = temp[0].replace('[OUT]', '')
-                if temp[0] != 'T32':  # Only for CAN message
-                    temp.append('Period')  # Default periodic message
-                    for i in temp[1].split('_'):
-                        if 'ms' in i:
-                            if int(i.replace('ms', '')) <= 0:
-                                temp[-1] = 'Event'
-                else:  # In case of Trace32
-                    temp = [temp[0], '', temp[-1]]  # Index 2를 변수로 설정 - Dev, '', symbol
-                    t32_usage |= MASK_FIRST_BIT
-                lst_out.append(temp)
-            else:  # In case of Input
-                col_in.append(col)  # Insert Input variable
-                if temp[0] != 'LIN' and temp[0] != 'T32':  # Only for CAN message
-                    id = canBus.devs[temp[0]].get_msg_id(temp[1])  # get the id to find whether it is extended or not
-                    if id > 0xFFFF:
-                        temp.append('Extended')
-                    else:
-                        temp.append('Normal')
-
-                    if '_E_' in temp[1]:
-                        temp += ['Event', '0.2']
-                    else:
-                        for i in temp[1].split('_'):
-                            if 'ms' in i:
-                                if int(i.replace('ms', '')) <= 0:
-                                    temp += ['Event', '0.2']
-                                else:
-                                    temp += ['Period', str(float(i.replace('ms', '')) / 1000)]
-                else:  # In Case of Trace32
-                    t32_usage |= MASK_SECOND_BIT
-                lst_in.append(temp)
-        lst_total = [msg[:3] for msg in lst_in + lst_out]  # combine all msg
-        return col_in, col_out, lst_in, lst_out, lst_total, t32_usage
-
-    def _get_msg_read(self, lst_output: list) -> str:
-        idx = 0
-        lst_line = []
-        used_lines = {}
-        for str_out in lst_output:
-            if 'T32' in str_out[0]:
-                line = f"                out_data.append(t32.get_symbol_data(sym='{str_out[-1]}'))"  # int형 return값 받기
-            else:
-                if 'Event' in str_out[-1]:
-                    dev_line = f"self.can.devs['{str_out[0]}'].msg_read_event('{str_out[1]}', decode_on=False)"
-                else:
-                    dev_line = f"self.can.devs['{str_out[0]}'].msg_read_name('{str_out[1]}', decode_on=False)"
-
-                if dev_line in used_lines:
-                    msg_var = used_lines[dev_line]
-                    line = f"                out_data.append({msg_var}['{str_out[2]}'] if {msg_var} else None)"
-                else:
-                    msg_var = f'msg_{idx}'
-                    used_lines[dev_line] = msg_var
-                    idx += 1
-                    if 'Event' in str_out[-1]:
-                        line = (
-                            f"                {msg_var} = self.can.devs['{str_out[0]}'].msg_read_event('{str_out[1]}', decode_on=False)\n"
-                            f"                out_data.append({msg_var}['{str_out[2]}'] if {msg_var} else None)")
-                    else:
-                        line = (
-                            f"                {msg_var} = self.can.devs['{str_out[0]}'].msg_read_name('{str_out[1]}', decode_on=False)\n"
-                            f"                out_data.append({msg_var}['{str_out[2]}'] if {msg_var} else None)")
-
-            lst_line.append(line)
-        return '\n'.join(lst_line)
+        except Exception as e:
+            print(f"Error in legacy method _get_msg_in_out: {e}")
+            return [], [], [], [], [], 0

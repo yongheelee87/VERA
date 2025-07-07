@@ -36,7 +36,7 @@ class LogThread(Thread):
 
 # Initialize all variables
 canBus.stop_all_period_msg()
-t32.re_init()
+t32.reinitialize()
 time.sleep(0.5)
 
 if lst_t32_out:   # T32 Output 있다면
@@ -56,7 +56,7 @@ for i in input_data:
         canBus.stop_all_period_msg()
         i[2] = None
         log_th.in_data = i[2:]
-        t32.re_init()
+        t32.reinitialize()
         time.sleep(1)
 
     log_th.step = int(i[0])

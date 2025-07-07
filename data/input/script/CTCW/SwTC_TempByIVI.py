@@ -42,7 +42,7 @@ class LogThread(Thread):
 
 # Initialize all variables
 canBus.stop_all_period_msg()
-t32.re_init()
+t32.reinitialize()
 time.sleep(0.5)
 
 if lst_t32_out:   # T32 Output 있다면
@@ -70,7 +70,7 @@ for i in tqdm(input_data,
         log_th.in_data = i[2:]
 
         canBus.stop_all_period_msg()
-        t32.re_init()
+        t32.reinitialize()
         canBus.devs['HS-RGW_T1'].msg_period_write('CC_01_200ms', 'CC_ACSetSta', 1, 0.2)  # 냉동기 작동
     elif i[2] == 254:
         log_th.step = int(i[0])

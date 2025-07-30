@@ -76,7 +76,7 @@ class CanTraceWindow(QWidget):
         for dev in canBus.lst_dev:
             str_rx = f'{dev}\n\n'
             for id in canBus.devs[dev].rx.msg_dict.keys():
-                can_rx_data = canBus.devs[dev].msg_read_id(can_id=int(id))
+                can_rx_data = canBus.devs[dev].read_msg_by_id(can_id=int(id))
                 if bool(can_rx_data):
                     str_can_rx_data = f'Frame: {str(canBus.devs[dev].get_msg_name(int(id)))}\n'
                     str_can_rx_data += str(can_rx_data).replace("{", '').replace("}", '').replace(", ", '\n')

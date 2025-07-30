@@ -45,7 +45,7 @@ class LogThread(Thread):
     def run(self):
         while True:
             if self.log_state:
-                can_out = self.can.devs['HS_M'].msg_read_name('PBVDC_04_200ms_1', decode_on=False)
+                can_out = self.can.devs['HS_M'].read_msg_by_frame('PBVDC_04_200ms_1', decode_on=False)
                 if can_out:
                     wrngSta = can_out['ACTempWrngSta']
                     wrngVal = can_out['ACTempWrngVal']
@@ -62,8 +62,8 @@ t32.reset_go()
 time.sleep(0.5)
 
 # 초기화
-canBus.devs['HS-RGW_T1'].msg_period_write('CC_01_200ms', 'ACSetSta', 1, 0.2)  # 냉동기 작동
-canBus.devs['HS_M'].msg_write('CCU_CCS_01_00ms_2', 'SetCargoWrngValue', 3, 0.5, True)  # NVM 초기화 값
+canBus.devs['HS-RGW_T1'].send_periodic_signal('CC_01_200ms', 'ACSetSta', 1, 0.2)  # 냉동기 작동
+canBus.devs['HS_M'].send_signal('CCU_CCS_01_00ms_2', 'SetCargoWrngValue', 3, 0.5, True)  # NVM 초기화 값
 time.sleep(1)
 
 # Measure Data Thread 설정
@@ -79,17 +79,17 @@ for i in tqdm(input_data,
               colour='green'  # Bar 색
               ):
     if i[0] != 255:
-        canBus.devs['HS-RGW_T1'].msg_period_write('CC_01_200ms', 'ACSetSta', i[0], 0.2)
-        canBus.devs['HS-RGW_T1'].msg_period_write('CC_01_200ms', 'ACSetTemp', i[1], 0.2)
-        canBus.devs['HS-RGW_T1'].msg_period_write('CC_01_200ms', 'ACCurtemp_1', i[2], 0.2)
-        canBus.devs['HS_M'].msg_write('CCU_CCS_01_00ms_2', 'SetCargoWrngValue', i[3], 0.5, True)
-        canBus.devs['HS_M'].msg_write('IVI_USM_E_01', 'IVI_ACTempWrngValCtrl', i[4], 0.5, True)
-        canBus.devs['HS_M'].msg_write('IVI_USM_E_01', 'IVI_ACUSMReset', i[5], 0.5, True)
+        canBus.devs['HS-RGW_T1'].send_periodic_signal('CC_01_200ms', 'ACSetSta', i[0], 0.2)
+        canBus.devs['HS-RGW_T1'].send_periodic_signal('CC_01_200ms', 'ACSetTemp', i[1], 0.2)
+        canBus.devs['HS-RGW_T1'].send_periodic_signal('CC_01_200ms', 'ACCurtemp_1', i[2], 0.2)
+        canBus.devs['HS_M'].send_signal('CCU_CCS_01_00ms_2', 'SetCargoWrngValue', i[3], 0.5, True)
+        canBus.devs['HS_M'].send_signal('IVI_USM_E_01', 'IVI_ACTempWrngValCtrl', i[4], 0.5, True)
+        canBus.devs['HS_M'].send_signal('IVI_USM_E_01', 'IVI_ACUSMReset', i[5], 0.5, True)
     else:
         canBus.stop_all_period_msg()
         log_th.in_data = [None for _ in range(6)]
         t32.reset_go()
-        canBus.devs['HS-RGW_T1'].msg_period_write('CC_01_200ms', 'ACSetSta', 1, 0.2)  # 냉동기 작동
+        canBus.devs['HS-RGW_T1'].send_periodic_signal('CC_01_200ms', 'ACSetSta', 1, 0.2)  # 냉동기 작동
         time.sleep(4)
         i[0] = None
 

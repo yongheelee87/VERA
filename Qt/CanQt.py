@@ -132,27 +132,27 @@ class CanWindow(QWidget):
                     lst_cmd = cmd[2:].strip().replace("'", '').split(",")
                     dev = lst_cmd[0].strip()
                     if len(lst_cmd) <= 5:
-                        canBus.devs[dev].msg_period_write(lst_cmd[1].strip(), lst_cmd[2].strip(), float(lst_cmd[3].strip()), float(lst_cmd[4].strip()))
+                        canBus.devs[dev].send_periodic_signal(lst_cmd[1].strip(), lst_cmd[2].strip(), float(lst_cmd[3].strip()), float(lst_cmd[4].strip()))
                     else:
-                        canBus.devs[dev].msg_period_write(lst_cmd[1].strip(), lst_cmd[2].strip(), float(lst_cmd[3].strip()), float(lst_cmd[4].strip()), True)
+                        canBus.devs[dev].send_periodic_signal(lst_cmd[1].strip(), lst_cmd[2].strip(), float(lst_cmd[3].strip()), float(lst_cmd[4].strip()), True)
                     read_msg += f'Write Msg {lst_cmd}\n'
                 elif 'WP:' in cmd[:3]:
                     lst_cmd = cmd[3:].strip().replace("'", '').split(",")
                     dev = lst_cmd[0].strip()
                     if len(lst_cmd) <= 5:
-                        canBus.devs[dev].msg_period_write(lst_cmd[1].strip(), lst_cmd[2].strip(), float(lst_cmd[3].strip()), float(lst_cmd[4].strip()))
+                        canBus.devs[dev].send_periodic_signal(lst_cmd[1].strip(), lst_cmd[2].strip(), float(lst_cmd[3].strip()), float(lst_cmd[4].strip()))
                     else:
-                        canBus.devs[dev].msg_period_write(lst_cmd[1].strip(), lst_cmd[2].strip(), float(lst_cmd[3].strip()), float(lst_cmd[4].strip()), True)
+                        canBus.devs[dev].send_periodic_signal(lst_cmd[1].strip(), lst_cmd[2].strip(), float(lst_cmd[3].strip()), float(lst_cmd[4].strip()), True)
                     read_msg += f'Write Period Msg {lst_cmd}\n'
                 elif 'WR:' in cmd[:3]:
                     lst_cmd = cmd[3:].strip().replace("'", '').split(",")
                     dev = lst_cmd[0].strip()
-                    canBus.devs[dev].msg_raw_write(int(lst_cmd[1].strip(), 16), to_hex_big_lst(lst_cmd[2].strip()))
+                    canBus.devs[dev].send_raw_msg(int(lst_cmd[1].strip(), 16), to_hex_big_lst(lst_cmd[2].strip()))
                     read_msg += f'Write Raw Msg {lst_cmd}\n'
                 elif 'R:' in cmd[:2]:
                     lst_cmd = cmd[2:].strip().replace("'", '').split(",")
                     dev = lst_cmd[0].strip()
-                    can_rx_data = canBus.devs[dev].msg_read_name(frame_name=lst_cmd[1].strip())
+                    can_rx_data = canBus.devs[dev].read_msg_by_frame(frame_name=lst_cmd[1].strip())
                     read_msg += (str(can_rx_data[lst_cmd[2].strip()]) + '\n')
                 elif 'T:' in cmd[:2]:
                     time.sleep(float(cmd[2:].strip()))
@@ -163,9 +163,9 @@ class CanWindow(QWidget):
     def func_update_rx_data(self):
         # HEX형태로 입력한건지 메세지 이름으로 입력한건지 구분
         if '0x' in self.CAN_Frame:
-            can_rx_data = canBus.devs[self.read_dev].msg_read_id(can_id=int(self.CAN_Frame, 16))
+            can_rx_data = canBus.devs[self.read_dev].read_msg_by_id(can_id=int(self.CAN_Frame, 16))
         elif self.CAN_Frame != '':
-            can_rx_data = canBus.devs[self.read_dev].msg_read_name(frame_name=self.CAN_Frame)
+            can_rx_data = canBus.devs[self.read_dev].read_msg_by_frame(frame_name=self.CAN_Frame)
         else:
             can_rx_data = False
 

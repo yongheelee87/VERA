@@ -80,7 +80,7 @@ class TestCaseWindow(QWidget):
         if self.single_mode is True:
             self._update_testcase()  # Line에 기입된 Case Number 정렬하기
             if self.testcase_num_str:
-                self.swTest.update_test_case(pjt=self.project, test_num=self.testcase_num_str)
+                self.swTest.update_test_case(project=self.project, test_numbers=self.testcase_num_str)
                 self.test_th.start()
         else:
             self.swTest.test_map = yaml.load(self.ui_tc.pText_map_test.toPlainText(), Loader=yaml.SafeLoader)
@@ -123,7 +123,7 @@ class TestCaseWindow(QWidget):
             self.swTest.script_path = os.path.join('data', 'input', 'script', self.project)
             path = f'{self.swTest.script_path}/set/map_script_sw_test.yaml'
         else:
-            path = self.swTest.yaml_path
+            path = self.swTest.config.yaml_path
 
         with open(path, 'r', encoding='utf-8') as f:
             f_lines = f.readlines()

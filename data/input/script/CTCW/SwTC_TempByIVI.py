@@ -48,8 +48,8 @@ time.sleep(0.5)
 if lst_t32_out:   # T32 Output 있다면
     t32.rx.vars = lst_t32_out  # define T32 rx variable
 
-canBus.devs['HS-RGW_T1'].msg_period_write('CC_01_200ms', 'CC_ACSetSta', 1, 0.2)  # 냉동기 작동
-canBus.devs['FD_C'].msg_write('CCU_CCS_01_00ms', 'SetCargoWrngValue', 3, 0.2)  # NVM 초기화 값
+canBus.devs['HS-RGW_T1'].send_periodic_signal('CC_01_200ms', 'CC_ACSetSta', 1, 0.2)  # 냉동기 작동
+canBus.devs['FD_C'].send_signal('CCU_CCS_01_00ms', 'SetCargoWrngValue', 3, 0.2)  # NVM 초기화 값
 time.sleep(1)
 
 # Measure Data Thread 설정
@@ -71,7 +71,7 @@ for i in tqdm(input_data,
 
         canBus.stop_all_period_msg()
         t32.reinitialize()
-        canBus.devs['HS-RGW_T1'].msg_period_write('CC_01_200ms', 'CC_ACSetSta', 1, 0.2)  # 냉동기 작동
+        canBus.devs['HS-RGW_T1'].send_periodic_signal('CC_01_200ms', 'CC_ACSetSta', 1, 0.2)  # 냉동기 작동
     elif i[2] == 254:
         log_th.step = int(i[0])
         i[2] = None

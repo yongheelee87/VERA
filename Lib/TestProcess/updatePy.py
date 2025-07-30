@@ -79,8 +79,6 @@ class UpdatePyConstants:
     DEV_SIGNAL_END = '# Dev signal List End'
     LOG_THREAD_BEGIN = '# LogThread Begin'
     LOG_THREAD_END = '# LogThread End'
-    DEV_INPUT_BEGIN = '# Dev Input Begin'
-    DEV_INPUT_END = '# Dev Input End'
     TC_MAIN_BEGIN = '# TC main Begin'
     TC_MAIN_END = '# TC main End'
 
@@ -609,22 +607,14 @@ class UpdatePy:
                 UpdatePyConstants.LOG_THREAD_BEGIN,
                 UpdatePyConstants.LOG_THREAD_END,
                 self._generate_log_thread_code(test_data, config)
-            )
-        ]
-
-        # Add appropriate input handling
-        if UpdatePyConstants.DEV_INPUT_BEGIN in str(test_data):  # Check if custom input handling needed
-            replacements.append((
-                UpdatePyConstants.DEV_INPUT_BEGIN,
-                UpdatePyConstants.DEV_INPUT_END,
-                self._generate_input_write_code(test_data.input_signals)
-            ))
-        else:
-            replacements.append((
+            ),
+            (
+                # Add appropriate input handling
                 UpdatePyConstants.TC_MAIN_BEGIN,
                 UpdatePyConstants.TC_MAIN_END,
                 self._generate_main_code_with_frame_writes(test_data.input_signals)
-            ))
+            )
+        ]
 
         return replacements
 
@@ -650,9 +640,9 @@ class UpdatePy:
             else:
                 # Create message reading code
                 if signal.message_type == MessageType.EVENT.value:
-                    msg_read = f"self.can.devs['{signal.device}'].msg_read_event('{signal.frame}', decode_on=False)"
+                    msg_read = f"self.can.devs['{signal.device}'].read_event_msg('{signal.frame}', decode_on=False)"
                 else:
-                    msg_read = f"self.can.devs['{signal.device}'].msg_read_name('{signal.frame}', decode_on=False)"
+                    msg_read = f"self.can.devs['{signal.device}'].read_msg_by_frame('{signal.frame}', decode_on=False)"
 
                 # Reuse message variable if same message already read
                 if msg_read in used_messages:
@@ -665,28 +655,6 @@ class UpdatePy:
 
                     line = (f"                {msg_var} = {msg_read}\n"
                             f"                out_data.append({msg_var}['{signal.signal}'] if {msg_var} else None)")
-
-            lines.append(line)
-
-        return '\n'.join(lines)
-
-    def _generate_input_write_code(self, input_signals: List[SignalInfo]) -> str:
-        """Generate code for writing input signals individually"""
-        lines = []
-
-        for idx, signal in enumerate(input_signals, UpdatePyConstants.SIGNAL_START_INDEX):
-            if signal.device in [DeviceType.LIN.value, DeviceType.T32.value]:
-                line = f"        t32.write_symbol(symbol='{signal.symbol}', value=i[{idx}])"
-            else:
-                # CAN message write
-                extended_param = ", is_extended=True" if signal.frame_type == FrameType.EXTENDED.value else ""
-
-                if signal.message_type == MessageType.EVENT.value:
-                    line = (f"        canBus.devs['{signal.device}'].msg_write("
-                            f"'{signal.frame}', '{signal.signal}', i[{idx}], {signal.timeout}{extended_param})")
-                else:
-                    line = (f"        canBus.devs['{signal.device}'].msg_period_write("
-                            f"'{signal.frame}', '{signal.signal}', i[{idx}], {signal.timeout}{extended_param})")
 
             lines.append(line)
 
@@ -726,11 +694,11 @@ class UpdatePy:
                 extended_param = ", is_extended=True" if first_signal.frame_type == FrameType.EXTENDED.value else ""
 
                 if first_signal.message_type == MessageType.EVENT.value:
-                    line = (f"        canBus.devs['{first_signal.device}'].msg_write_by_frame("
+                    line = (f"        canBus.devs['{first_signal.device}'].send_frame_msg("
                             f"""'{first_signal.frame}', {signal_names}, {str(signal_values).replace("'", "")}, """
                             f"{first_signal.timeout}{extended_param})")
                 else:
-                    line = (f"        canBus.devs['{first_signal.device}'].msg_period_write_by_frame("
+                    line = (f"        canBus.devs['{first_signal.device}'].send_periodic_frame_msg("
                             f"""'{first_signal.frame}', {signal_names}, {str(signal_values).replace("'", "")}, """
                             f"{first_signal.timeout}{extended_param})")
 

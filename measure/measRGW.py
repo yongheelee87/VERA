@@ -6,7 +6,6 @@ import matplotlib.pyplot as plt
 from mplcursors import cursor
 from Lib.Common import isdir_and_make, open_path, load_csv_list
 from Lib.Inst import canBus
-from Lib.DataProcess import make_meas_HTML
 from Lib.TestProcess.updatePy import UpdatePy
 
 
@@ -103,7 +102,6 @@ class MeasRGW(UpdatePy):
         df_tc_sum = pd.DataFrame(np.array([str_start, str_end, elapsed_time, res, self.num_lines], dtype=object),
                                  columns=["Value"],
                                  index=["Date_Start", "Date_End", "Elapsed_Time", "Result", "Steps"])
-        make_meas_HTML(df_sum=df_tc_sum, project='RGW', tc_script=self.df_tc, tc_in_out=self.in_out_sigs, export_path=self.py_output_path)  # 최종 결과물 HTML로 산출
 
     def step_graph(self, step_debug: bool = True):
         self.fig.clf()  # figure 초기화

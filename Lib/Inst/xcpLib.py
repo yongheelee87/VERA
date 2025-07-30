@@ -63,7 +63,7 @@ class XcpProtocol:
         self.can.send(can_message, timeout=None)
         XcpVar.status = False
 
-    def send_msg_write(self, time_delay: int or float, addr_hex: str, data):
+    def send_send_signal(self, time_delay: int or float, addr_hex: str, data):
         """
         :param time_delay: Time after Message Transfer Request
         :param addr_hex: Symbol or Address Hex 입력; 메모리에 없는 address입력시 MCU 리셋

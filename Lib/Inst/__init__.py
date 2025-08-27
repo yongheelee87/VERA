@@ -14,30 +14,53 @@ import pandas as pd
 from Lib.Common import Configure
 
 # basic library
-from . canLib import CANBus
-from . trace32Lib import Trace32
-# from . visaLib import *
 # from . xcpLib import *
 # from . telnetLib import *
 # from . serialLib import *
 
-canBus = CANBus(config_sys=Configure.set)  # CAN BUS 연결; 전역 변수로 사용
-t32 = Trace32(config_sys=Configure.set)  # TRACE32 연결; 전역 변수로 사용
 
-'''
-visa = VisaDev(config_sys=Configure.set)  # ViSA 연결; 전역 변수로 사용
-telnet = TelnetClient(config_sys=Configure.set)  # Telnet 연결; 전역 변수로 사용
-'''
+# 같은 'type'에 따라 항목을 묶기
+def group_by_type(data):
+    grouped_data = {}
+
+    for key, value in data.items():
+        if 'type' in value:
+            type_key = value['type']
+            if type_key not in grouped_data:
+                grouped_data[type_key] = {}
+            grouped_data[type_key][key] = value
+
+    return grouped_data
 
 
 def get_inst_status() -> pd.DataFrame:
     lst_inst_data = []
-    lst_inst = [i for i in Configure.set.keys() if 'system' not in i and 'XCP' not in i]
-    for inst in lst_inst:
-        if Configure.set[inst]['type'] == 'T32':
-            lst_inst_data.append([inst, 'Not Connected' if t32.status is False else 'Connected'])
-        elif Configure.set[inst]['type'] == 'can':
-            lst_inst_data.append([inst, 'Not Connected' if canBus.devs[inst].status is False else 'Connected'])
-        else:
-            lst_inst_data.append([inst, 'Not Connected' if visa.status[inst] is False else 'Connected'])
+    for device_name, device_settings in grouped_device.items():
+        if device_name == 'T32' or device_name == 'BlueBox':
+            lst_inst_data.append([device_name, 'Not Connected' if debug.status is False else 'Connected'])
+
+        elif device_name == 'can':
+            for name in device_settings.keys():
+                lst_inst_data.append([name, 'Not Connected' if canBus.devs[name].status is False else 'Connected'])
+
     return pd.DataFrame(np.array(lst_inst_data, dtype=object), columns=['Name', 'Connect'])
+
+
+grouped_device = group_by_type(Configure.set)
+for device_type, device_config in grouped_device.items():
+    if device_type == 'T32':
+        from .trace32Lib import Trace32
+        debug = Trace32(config=grouped_device['T32']['DEBUGGER'])  # TRACE32 연결; 전역 변수로 사용
+
+    elif device_type == 'BlueBox':
+        from .blueboxLib import BlueBox
+        debug = BlueBox(wks_path=grouped_device['BlueBox']['DEBUGGER']['flash_file'])  # BlueBox 연결; 전역 변수로 사용
+
+    elif device_type == 'can':
+        from .canLib import CANBus
+        canBus = CANBus(config=grouped_device['can'],
+                        git_path=Configure.set['system']['git_path'])  # CAN BUS 연결; 전역 변수로 사용
+
+    elif device_type == 'visa':
+        from .visaLib import VisaDev
+        visa = VisaDev(config=grouped_device['visa'])  # ViSA 연결; 전역 변수로 사용

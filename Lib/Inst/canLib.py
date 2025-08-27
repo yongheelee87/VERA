@@ -3,7 +3,6 @@ from typing import Dict, List, Optional, Union, Any
 from cantools import database
 from can import interface, broadcastmanager, Notifier, BufferedReader, Message, CanError
 from threading import Thread
-from Lib.Common import Configure
 
 # Status constants
 CAN_ERR: int = 0
@@ -23,7 +22,7 @@ class CANDev:
     __slots__ = ['config', 'bus', 'buffer', 'notifier', 'status', 'db_path',
                  'db', 'sig_val', 'rx', 'tx_data', 'tx_period', 'event_time']
 
-    def __init__(self, name: str, config_can: Dict[str, Any]) -> None:
+    def __init__(self, name: str, config_can: Dict[str, Any], git_path: str) -> None:
         self.config: Dict[str, Any] = config_can
         self.bus: Optional[interface.Bus] = None
         self.buffer: BufferedReader = BufferedReader()
@@ -31,7 +30,7 @@ class CANDev:
         self.status: int = CAN_ERR
 
         # Initialize database
-        self.db_path: str = self._get_dbc(name)
+        self.db_path: str = self._get_dbc(name, git_path)
         self.db: database.Database = database.load_file(self.db_path)
         self.sig_val: Dict[str, Dict[int, Union[str, int]]] = self._get_decode_val()
 
@@ -129,17 +128,16 @@ class CANDev:
             return
 
         msg_tx = self.db.get_message_by_name(frame_name)  # 해당 CAN message frame 정보 가져오기
-
         if frame_name in self.tx_data:
             if value == self.tx_data[frame_name].get(sig_name):  # 같은 시그널 값 요청시 동작 불필요
-                return
+                return  # 함수 종료
             else:
                 self.tx_data[frame_name].update({sig_name: value})  # 다른 시그널 값 업데이트
                 self._stop_overlap_msg(frame_name)
         else:
             # Create signal dictionary with default zeros
             msg_raw_data: Dict[str, Union[int, float]] = {signal: 0 for signal in msg_tx.signal_tree}
-            msg_raw_data.update(self.tx_data[frame_name])  # 해당 frame signal 값 업데이트
+            msg_raw_data[sig_name] = value  # 해당 signal 값 업데이트
             self.tx_data[frame_name] = msg_raw_data  # Frame 및 signal 생성
 
         try:
@@ -168,6 +166,7 @@ class CANDev:
         msg_raw_data: Dict[str, Union[int, float]] = {signal: 0 for signal in msg_tx.signal_tree}
         msg_raw_data.update(signal_data)  # 해당 frame signal 값 업데이트
 
+        # Encode and send
         try:
             can_message = Message(
                 arbitration_id=msg_tx.frame_id,
@@ -192,6 +191,7 @@ class CANDev:
         }
 
         msg_tx = self.db.get_message_by_name(frame_name)  # 해당 CAN message frame 정보 가져오기
+
         if frame_name in self.tx_data:
             if all(item in self.tx_data[frame_name].items() for item in signal_data.items()): # 모든 key-value 쌍이 종속되어 있을ㄸ
                 return
@@ -251,11 +251,11 @@ class CANDev:
         """Stop existing periodic message for the same frame"""
         self.tx_period[frame_name].stop()
 
-    def _get_dbc(self, name: str) -> str:
+    def _get_dbc(self, name: str, git_path: str) -> str:
         """Get DBC file path"""
         db_path: str = self.config['DBC_file_path']
         if db_path == 'git':
-            ref_path = os.path.join(Configure.set['system']['git_path'], 'References', 'DB')
+            ref_path = os.path.join(git_path, 'References', 'DB')
             try:
                 for file in os.listdir(ref_path):
                     if '.dbc' in file and name in file:
@@ -287,7 +287,6 @@ class CANDev:
         return decode_dict
 
 
-# CAN RX Msg Thread로 받기
 class CANRxThread(Thread):
     """Optimized CAN RX message handler thread"""
 
@@ -314,14 +313,14 @@ class CANBus:
 
     __slots__ = ['config', 'devs', 'lst_dev']
 
-    def __init__(self, config_sys: Dict[str, Any]) -> None:
-        self.config: Dict[str, Any] = config_sys
+    def __init__(self, config: Dict[str, Any], git_path: str) -> None:
+        self.config: Dict[str, Any] = config
         self.devs: Dict[str, CANDev] = {}
         self.lst_dev: List[str] = self._find_can()
 
         # Initialize all CAN devices
         for dev in self.lst_dev:
-            self.devs[dev] = CANDev(name=dev, config_can=self.config[dev])
+            self.devs[dev] = CANDev(name=dev, config_can=self.config[dev], git_path=git_path)
 
     def check_status(self) -> List[str]:
         """Check connection status of all CAN devices"""
@@ -349,7 +348,7 @@ class CANBus:
             self.devs[dev].disable_periodic_msgs()
             self.devs[dev].clear_msg()
 
-    def get_all_period_msg(self) -> Dict[str, Dict[str, Union[int, float]]]:
+    def get_all_period_msg(self) -> Dict[str, Dict[str, Union[int, float, None]]]:
         """Get all active periodic messages from all devices"""
         all_msgs: Dict[str, Dict[str, Union[int, float, None]]] = {}
         for dev in self.lst_dev:
@@ -358,7 +357,4 @@ class CANBus:
 
     def _find_can(self) -> List[str]:
         """Find all CAN device configurations"""
-        return [
-            dev for dev in list(self.config.keys())[1:]
-            if self.config[dev].get('type', '').lower() == 'can'
-        ]
+        return list(self.config.keys())

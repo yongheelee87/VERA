@@ -210,7 +210,7 @@ def _get_ytick_labels(
     for y_val in yticks_val:
         if (idx < len(sigs) and
                 sig_name == sigs[idx][-1] and
-                sigs[idx][0] not in ['T32', 'LIN'] and
+                sigs[idx][0] not in 'DEBUG' and
                 sig_name in canBus.devs[sigs[idx][0]].sig_val and
                 y_val in canBus.devs[sigs[idx][0]].sig_val[sig_name]):
             yticks_labels.append(canBus.devs[sigs[idx][0]].sig_val[sig_name][y_val])
@@ -307,8 +307,8 @@ def make_home_HTML(
     additional_header = f'''
     <h2 style="font-family: 'Jua', sans-serif;font-size: 1.0em;color: red;margin: 20px 0 10px 40px;>
     * 테스트 수행 날짜: {test_date}<br>
-    * 테스트 환경: 제어기 + CAN + T32<br>
-    * 테스트 방법: CAN Bus와 T32 제어 가능한 프로그램을 이용하여 정해진 시나리오를 진행
+    * 테스트 환경: 제어기 + CAN + Debugger<br>
+    * 테스트 방법: CAN Bus와 Debugger 제어 가능한 프로그램을 이용하여 정해진 시나리오를 진행
     </h2>
     '''
     table_content = _create_home_table(data, test_date)

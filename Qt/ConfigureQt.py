@@ -1,6 +1,6 @@
 from templates import *
 from Lib.Common import Configure, logging_print
-from Lib.Inst import canBus, t32
+from Lib.Inst import canBus, debug
 
 
 class ConfigureWindow(QWidget):
@@ -45,7 +45,7 @@ class ConfigureWindow(QWidget):
 
         # Initialization of All devices
         canBus.__init__(config_sys=Configure.set)
-        t32.__init__(config_sys=Configure.set)
+        debug.__init__(config=Configure.set)
         # visa.__init__(config_sys=Configure.set)
 
     def _update_config(self):

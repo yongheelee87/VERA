@@ -1,20 +1,19 @@
 import os
 from itertools import groupby
-from typing import List, Tuple, Any, Optional, Union
+from typing import List, Tuple, Any, Optional
 from dataclasses import dataclass, field
-from enum import IntFlag, Enum
+from enum import Enum
 from pathlib import Path
 import pandas as pd
 import numpy as np
 from Lib.Inst import canBus
-from Lib.Common import load_csv_list, to_raw, find_str_inx, load_pkl_list
+from Lib.Common import load_csv_list, to_raw, find_str_inx
 
 
 class DeviceType(Enum):
     """Device type enumeration"""
     CAN = "CAN"
-    LIN = "LIN"
-    T32 = "T32"
+    DEBUG = "DEBUG"
 
 
 class MessageType(Enum):
@@ -35,14 +34,6 @@ class TimeType(Enum):
     TOTAL = "Total"
 
 
-class T32Usage(IntFlag):
-    """T32 usage flags"""
-    NONE = 0
-    OUTPUT = 1
-    INPUT = 2
-    ALL = 3
-
-
 class UpdatePyConstants:
     """Constants for UpdatePy class"""
     # File extensions
@@ -53,7 +44,7 @@ class UpdatePyConstants:
     # Special command codes
     RESET_CODE = 255
     CAN_STOP_CODE = 254
-    FLASH_CODE = 253
+    NVM_DEFAULT = 253
 
     # Signal prefixes and suffixes
     OUTPUT_PREFIX = '[OUT]'
@@ -144,7 +135,7 @@ from threading import Thread
 from tqdm import tqdm
 import time
 from Lib.Common import export_csv_list, to_hex_big_lst
-from Lib.Inst import canBus, t32
+from Lib.Inst import canBus, debug
 from Lib.DataProcess import signal_step_graph, judge_final_result, find_out_signals_for_col
 
 
@@ -158,7 +149,7 @@ outcome = [title]
 # Dev signal List Begin
 # Dev signal List End
 
-out_col, lst_t32_out = find_out_signals_for_col(dev_out_sigs)
+out_col = find_out_signals_for_col(dev_out_sigs)
 total_col = ['Step', 'Elapsed_Time'] + [f'In: {sig[2]}' for sig in dev_in_sigs] + out_col
 outcome.append(total_col)
 
@@ -201,7 +192,7 @@ class LogThread(Thread):
 # Initialize all variables
 canBus.stop_all_period_msg()
 
-t32.reinitialize()
+debug.reinitialize()
 time.sleep(0.5)
 
 # Measure Data Thread 설정
@@ -224,7 +215,7 @@ for i in tqdm(input_data,
         log_th.in_data = i[2:]
 
         canBus.stop_all_period_msg()
-        t32.reinitialize()
+        debug.reinitialize()
     elif i[2] == 254:
         log_th.step = int(i[0])
         i[2] = None
@@ -235,9 +226,13 @@ for i in tqdm(input_data,
         log_th.step = int(i[0])
         i[2] = None
         log_th.in_data = i[2:]
-
-        canBus.stop_all_period_msg()
-        t32.flash_binary(run_cmd=Configure.set['TRACE32']['flash_all_cmm'])
+        
+        
+        
+        
+        
+        
+        
     else:
 {write_msg}
 
@@ -252,13 +247,13 @@ for log_lst in log_th.log_lst:
     outcome.append(log_lst)
 
 df_log = pd.DataFrame(np.array(log_th.log_lst, dtype=np.float32), columns=total_col)
+df_log['Step'] = df_log['Step'].astype(int) 
 signal_step_graph(df=df_log.copy(), sigs=dev_all_sigs, x_col='Elapsed_Time', filepath=OUTPUT_PATH, filename=title[0], fill_zero=True)
 
 # Result judgement logic
 JUDGE_TYPE = "same"  # define type to judge data
 NUM_OF_MATCH = 0  # define criteria for matching rows
 outcome = judge_final_result(df_result=df_log[['Step'] + out_col], expected_outs=expected_data, num_match=NUM_OF_MATCH, meas_log=outcome.copy(), out_col=out_col, judge=JUDGE_TYPE)
-
 export_csv_list(OUTPUT_PATH, title[0], outcome)
 '''
 
@@ -292,7 +287,7 @@ class SignalProcessor:
             )
 
             # Process additional signal properties
-            if signal_info.device in [DeviceType.LIN.value, DeviceType.T32.value]:
+            if signal_info.device in DeviceType.DEBUG.value:
                 signal_info.symbol = parts[-1] if len(parts) > 2 else parts[1]
                 signal_info.frame = ""
             else:
@@ -306,7 +301,7 @@ class SignalProcessor:
     @staticmethod
     def _process_can_signal_properties(signal_info: SignalInfo):
         """Process CAN signal specific properties"""
-        if signal_info.device in [DeviceType.LIN.value, DeviceType.T32.value]:
+        if signal_info.device in DeviceType.DEBUG.value:
             return
 
         try:
@@ -378,7 +373,6 @@ class UpdatePy:
                 df_test_case = df_test_case[1]  # DataFrame
             else:
                 self.py_sub_title = Path(self.py_path).stem
-
             return code, df_test_case
 
         except Exception as e:
@@ -517,7 +511,7 @@ class UpdatePy:
         self.in_out_sigs = [input_cols[2:], output_cols[1:]]
 
         # Process signal information
-        input_signals, output_signals, all_signals, t32_usage = self._process_signal_information(columns)
+        input_signals, output_signals, all_signals = self._process_signal_information(columns)
 
         # Extract data arrays
         input_data = df[input_cols].to_numpy().tolist()
@@ -549,11 +543,10 @@ class UpdatePy:
         return input_cols, output_cols
 
     def _process_signal_information(self, columns: np.ndarray) -> Tuple[
-        List[SignalInfo], List[SignalInfo], List[List[str]], int]:
+        List[SignalInfo], List[SignalInfo], List[List[str]]]:
         """Process signal information from column names"""
         input_signals = []
         output_signals = []
-        t32_usage = T32Usage.NONE
 
         for col in columns[UpdatePyConstants.SIGNAL_START_INDEX:]:
             try:
@@ -561,12 +554,8 @@ class UpdatePy:
 
                 if UpdatePyConstants.OUTPUT_PREFIX in col:
                     output_signals.append(signal_info)
-                    if signal_info.device == DeviceType.T32.value:
-                        t32_usage |= T32Usage.OUTPUT
                 else:
                     input_signals.append(signal_info)
-                    if signal_info.device == DeviceType.T32.value:
-                        t32_usage |= T32Usage.INPUT
 
             except SignalProcessingError as e:
                 print(f"Warning: Skipping invalid signal column '{col}': {e}")
@@ -575,7 +564,7 @@ class UpdatePy:
         # Create combined signal list for plotting
         all_signals = [[sig.device, sig.frame, sig.signal] for sig in input_signals + output_signals]
 
-        return input_signals, output_signals, all_signals, int(t32_usage)
+        return input_signals, output_signals, all_signals
 
     def _replace_nan_with_none(self, data: List[List[Any]]) -> List[List[Any]]:
         """Replace NaN values with None for better JSON serialization"""
@@ -623,7 +612,7 @@ class UpdatePy:
         read_msg_code = self._generate_message_read_code(test_data.output_signals)
 
         return self.templates.get_log_thread_template().format(
-            len_in=len([col for col in range(2)]) + len(test_data.input_signals),  # Step, Time + input signals
+            len_in=len(test_data.input_signals),  # input signals
             sample_rate=config.sample_rate,
             read_msg=read_msg_code
         )
@@ -635,8 +624,8 @@ class UpdatePy:
         msg_index = 0
 
         for signal in output_signals:
-            if signal.device == DeviceType.T32.value:
-                line = f"                out_data.append(t32.read_symbol(symbol='{signal.symbol}'))"
+            if signal.device == DeviceType.DEBUG.value:
+                line = f"                out_data.append(debug.read_symbol(symbol='{signal.symbol}'))"
             else:
                 # Create message reading code
                 if signal.message_type == MessageType.EVENT.value:
@@ -669,7 +658,6 @@ class UpdatePy:
         """Generate code for writing signals grouped by frame"""
         lines = []
         idx = UpdatePyConstants.SIGNAL_START_INDEX
-
         # Group signals by frame
         grouped_signals = []
         for frame_name, signals in groupby(input_signals, lambda x: x.frame):
@@ -681,10 +669,13 @@ class UpdatePy:
 
             first_signal = signal_group[0]
 
-            if first_signal.device in [DeviceType.LIN.value, DeviceType.T32.value]:
-                # T32 signals are handled individually
-                line = f"        t32.write_symbol(symbol='{first_signal.symbol}', value=i[{idx}])"
-                idx += 1
+            if first_signal.device in DeviceType.DEBUG.value:
+                debug_lines = []
+                for sig in signal_group:
+                    # Debugger signals are handled individually
+                    debug_lines.append(f"        debug.write_symbol(symbol='{sig.symbol}', value=i[{idx}])")
+                    idx += 1
+                line = '\n'.join(debug_lines)
             else:
                 # CAN signals grouped by frame
                 signal_names = [sig.signal for sig in signal_group]
@@ -742,7 +733,7 @@ class UpdatePy:
         processed_df = df.copy()
         processed_df = processed_df.replace(str(UpdatePyConstants.CAN_STOP_CODE), 'CAN Stop')
         processed_df = processed_df.replace(str(UpdatePyConstants.RESET_CODE), 'Reset')
-        processed_df = processed_df.replace(str(UpdatePyConstants.FLASH_CODE), 'Flash')
+        processed_df = processed_df.replace(str(UpdatePyConstants.NVM_DEFAULT), 'NVM Default')
         return processed_df
 
     def _fill_header_variables(self, lines: List[str]) -> str:

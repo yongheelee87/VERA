@@ -132,9 +132,9 @@ class CanWindow(QWidget):
                     lst_cmd = cmd[2:].strip().replace("'", '').split(",")
                     dev = lst_cmd[0].strip()
                     if len(lst_cmd) <= 5:
-                        canBus.devs[dev].send_periodic_signal(lst_cmd[1].strip(), lst_cmd[2].strip(), float(lst_cmd[3].strip()), float(lst_cmd[4].strip()))
+                        canBus.devs[dev].send_signal(lst_cmd[1].strip(), lst_cmd[2].strip(), float(lst_cmd[3].strip()), float(lst_cmd[4].strip()))
                     else:
-                        canBus.devs[dev].send_periodic_signal(lst_cmd[1].strip(), lst_cmd[2].strip(), float(lst_cmd[3].strip()), float(lst_cmd[4].strip()), True)
+                        canBus.devs[dev].send_signal(lst_cmd[1].strip(), lst_cmd[2].strip(), float(lst_cmd[3].strip()), float(lst_cmd[4].strip()), True)
                     read_msg += f'Write Msg {lst_cmd}\n'
                 elif 'WP:' in cmd[:3]:
                     lst_cmd = cmd[3:].strip().replace("'", '').split(",")

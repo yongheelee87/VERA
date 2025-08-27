@@ -1,8 +1,8 @@
 import os
 import time
 import queue
-from threading import Thread, Lock
-from typing import Dict, Any, Optional, Union, List, Tuple
+from threading import Thread
+from typing import Dict, Any, Optional, Union, List
 from dataclasses import dataclass
 from enum import IntEnum
 
@@ -71,8 +71,8 @@ class Trace32:
     Optimized Trace32 class for debugging and system control
     """
 
-    def __init__(self, config_sys: Dict[str, Any]):
-        self.config_sys = config_sys
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
         self.trace32_config = self._parse_trace32_config()
 
         # Core components
@@ -83,7 +83,6 @@ class Trace32:
         self.command_queue: queue.Queue = queue.Queue()
         self.response_queue: queue.Queue = queue.Queue()
         self.in_reset = False
-        self._lock = Lock()
         self._worker_thread: Optional[Thread] = None
 
         # Initialize if Trace32 is configured
@@ -92,20 +91,16 @@ class Trace32:
 
     def _parse_trace32_config(self) -> Optional[Trace32Config]:
         """Parse and validate Trace32 configuration"""
-        if 'TRACE32' not in self.config_sys:
-            return None
-
-        config = self.config_sys['TRACE32']
         required_fields = ['api_path', 'auto_open']
 
         for field in required_fields:
-            if field not in config:
+            if field not in self.config:
                 print(f"Warning: Missing required Trace32 config field: {field}")
                 return None
 
         return Trace32Config(
-            api_path=config['api_path'],
-            auto_open=config.get('auto_open', False)
+            api_path=self.config['api_path'],
+            auto_open=self.config.get('auto_open', False)
         )
 
     def _initialize_trace32(self):
@@ -227,7 +222,7 @@ class Trace32:
 
         try:
             self.device.cmd(command)
-            self.wait_for_command_completion(timeout=timeout)
+            self.wait_for_ready(timeout=timeout)
         except CommandError as e:
             error_msg = f'Error executing command "{command}": {e}'
             print(error_msg)
@@ -532,7 +527,7 @@ class Trace32:
             print(error_msg)
             raise Trace32Error(error_msg)
 
-    def wait_for_command_completion(self, timeout: int):
+    def wait_for_ready(self, timeout: int):
         """
         Wait for command completion with timeout
 

@@ -1,0 +1,14 @@
+# Project and Test code Mapping file
+# Project: Test codes
+ 
+CTCW:
+  version: N/A
+  case:
+    - SwTC_TempByCCU
+    - SwTC_TempByIVI
+
+SWA:
+  version: N/A
+  case:
+    - SwTC_OnOff
+    - SwTC_USMOnOff

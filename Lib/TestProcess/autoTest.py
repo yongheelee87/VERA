@@ -12,7 +12,7 @@ import numpy as np
 
 from Lib.Common import isdir_and_make, Configure, load_csv_list
 from Lib.DataProcess import make_home_HTML, make_pjt_HTML
-from Lib.Inst import get_inst_status, t32
+from Lib.Inst import get_inst_status, debug
 from .updatePy import UpdatePy
 
 
@@ -44,8 +44,6 @@ class TestConstants:
     VERSION_FORMAT_LENGTH = 5
     BSW_VERSION_FORMAT = "{}.{}{}.{}.{:02d}"
     OTHER_VERSION_FORMAT = "{}_{}_{}_{}.{}"
-
-    MODULES = ['CCW', 'CTCW', 'SWA', 'SDR', 'CDW', 'BSW']
 
     BSW_VERSION_VARS = ['ubE_SoftwareVer1', 'ubE_SoftwareVer2', 'ubE_SoftwareVer3',
                         'ubE_SoftwareVer4', 'ubC_DraftReleaseCnt1']
@@ -266,7 +264,7 @@ class AutoTest(UpdatePy):
             self.config.project
         )
 
-        project_tests = self.test_map.get(self.config.project, [])
+        project_tests = self.test_map[self.config.project].get('case', [])
         num_tests = len(project_tests)
 
         print("*" * 60)
@@ -524,10 +522,10 @@ class AutoTest(UpdatePy):
             DataFrame with module versions
         """
         try:
-            t32.wait_for_command_completion(timeout=TestConstants.TIMEOUT_DEFAULT)
+            debug.wait_for_ready(timeout=TestConstants.TIMEOUT_DEFAULT)
             version_list = []
 
-            for module in TestConstants.MODULES:
+            for module in self.test_map.keys():
                 try:
                     if module == 'BSW':
                         version = self._get_bsw_version()
@@ -554,11 +552,11 @@ class AutoTest(UpdatePy):
         try:
             version_values = []
             for var in TestConstants.BSW_VERSION_VARS[:-1]:
-                value = t32.read_symbol(symbol=var)
+                value = debug.read_symbol(symbol=var)
                 version_values.append(chr(int(value)))
 
             # Last value is formatted differently
-            last_value = int(t32.read_symbol(symbol=TestConstants.BSW_VERSION_VARS[-1]))
+            last_value = int(debug.read_symbol(symbol=TestConstants.BSW_VERSION_VARS[-1]))
             version_values.append(last_value)
 
             return TestConstants.BSW_VERSION_FORMAT.format(*version_values)
@@ -569,16 +567,17 @@ class AutoTest(UpdatePy):
     def _get_module_version(self, module: str) -> str:
         """Get version for non-BSW module"""
         try:
-            version_hex = hex(int(t32.read_symbol(symbol=f'ASW_Version.{module}')))
-            version_str = version_hex[TestConstants.VERSION_FORMAT_LENGTH:]
+            sw_ver_symbol = self.test_map[module].get('version')
+            if sw_ver_symbol != 'N/A':
+                version_hex = hex(int(debug.read_symbol(symbol=sw_ver_symbol)))
+                version_str = version_hex[TestConstants.VERSION_FORMAT_LENGTH:]
 
-            if len(version_str) >= 5:
-                return TestConstants.OTHER_VERSION_FORMAT.format(
-                    version_str[0], version_str[1], version_str[2],
-                    version_str[3], version_str[4]
-                )
-            else:
-                return "Invalid"
+                if len(version_str) >= 5:
+                    return TestConstants.OTHER_VERSION_FORMAT.format(
+                        version_str[0], version_str[1], version_str[2],
+                        version_str[3], version_str[4]
+                    )
+            return "Unknown"
 
         except Exception as e:
             raise AutoTestError(f"Failed to get version for module {module}: {e}")
@@ -701,4 +700,4 @@ class AutoTest(UpdatePy):
         Returns:
             List of test case names
         """
-        return self.test_map.get(project, [])
+        return self.test_map[project].get('case', [])

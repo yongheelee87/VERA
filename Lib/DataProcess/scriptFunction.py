@@ -2,7 +2,7 @@ import pandas as pd
 from typing import List, Tuple, Any, Union
 
 
-def find_out_signals_for_col(out_sigs: List[List[Any]]) -> Tuple[List[str], List[Any]]:
+def find_out_signals_for_col(out_sigs: List[List[Any]]) -> List[str]:
     """
     최적화된 출력 신호 컬럼 및 T32 출력 추출 함수
 
@@ -10,11 +10,9 @@ def find_out_signals_for_col(out_sigs: List[List[Any]]) -> Tuple[List[str], List
         out_sigs: 출력 신호 정보를 담은 중첩 리스트
 
     Returns:
-        Tuple[List[str], List[Any]]: (컬럼명 리스트, T32 출력값 리스트)
+        List[str]: 컬럼명 리스트
     """
-    cols: List[str] = [f'Out: {sig[2]}' for sig in out_sigs]
-    t32_out: List[Any] = [sig[-1] for sig in out_sigs if 'T32' in sig[0]]
-    return cols, t32_out
+    return [f'Out: {sig[2]}' for sig in out_sigs]
 
 
 def judge_final_result(
@@ -94,16 +92,14 @@ def judge_final_result(
 
     # 실패 케이스 처리
     if fail_cases:
-        final_result = 'Fail'
-
         # 실패 케이스들을 meas_log에 삽입
         for idx, fail_case in enumerate(fail_cases):
             meas_log.insert(idx + 1, fail_case[1:])
 
         # 최종 결과 문자열 생성
         fail_steps: List[str] = [case[0] for case in fail_cases]
-        final_result += ',' + ','.join(fail_steps)
-        final_result_str: str = final_result.replace(',', ', ').replace('Fail', 'Fail Step:')
+        final_result = f"Fail,{','.join(fail_steps)}"
+        final_result_str: str = final_result.replace('Fail,', 'Fail Step: ').replace(',', ', ')
         print(f'*** {final_result_str}')
 
     meas_log.append(['Result', final_result])

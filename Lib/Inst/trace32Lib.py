@@ -89,6 +89,33 @@ class Trace32:
         if self.trace32_config:
             self._initialize_trace32()
 
+        # 함수 참조를 미리 저장 (속성 접근 오버헤드 제거)
+        device_read = self.device.variable.read
+        device_write = self.device.variable.write
+        queue_put = self.response_queue.put
+
+        def read_handler(args):
+            try:
+                queue_put(device_read(args).value)
+            except Exception as e:
+                print(f"Error reading variable '{args}': {e}")
+                queue_put(None)
+
+        def write_handler(args):
+            try:
+                device_write(args[0], args[1])
+            except Exception as e:
+                print(f"Error writing variable '{args[0]}': {e}")
+
+        self._handlers = {
+            CommandType.READ: read_handler,
+            CommandType.WRITE: write_handler,
+            CommandType.RESET: lambda args: setattr(self, 'in_reset', True),
+            CommandType.RESUME: lambda args: setattr(self, 'in_reset', False),
+        }
+
+        self._default = lambda args: print(f"Unknown command type: {args}")
+
     def _parse_trace32_config(self) -> Optional[Trace32Config]:
         """Parse and validate Trace32 configuration"""
         required_fields = ['api_path', 'auto_open']
@@ -407,9 +434,6 @@ class Trace32:
         Returns:
             List of breakpoint symbol names
         """
-        if not self.status:
-            raise Trace32Error("Device not connected")
-
         try:
             breakpoints = []
             for bp in self.device.breakpoint.list():
@@ -435,9 +459,6 @@ class Trace32:
         Returns:
             True if successful
         """
-        if not self.status:
-            raise Trace32Error("Device not connected")
-
         try:
             symbol = self.device.symbol.query_by_name(name=symbol_name)
             self.device.breakpoint.set(address=symbol.address)
@@ -458,9 +479,6 @@ class Trace32:
         Returns:
             True if successful
         """
-        if not self.status:
-            raise Trace32Error("Device not connected")
-
         try:
             symbol = self.device.symbol.query_by_name(name=symbol_name)
             self.device.breakpoint.delete(address=symbol.address)
@@ -481,9 +499,6 @@ class Trace32:
         Returns:
             True if successful
         """
-        if not self.status:
-            raise Trace32Error("Device not connected")
-
         try:
             symbol = self.device.symbol.query_by_name(name=symbol_name)
             self.device.breakpoint.disable(address=symbol.address)
@@ -504,9 +519,6 @@ class Trace32:
         Returns:
             True if successful
         """
-        if not self.status:
-            raise Trace32Error("Device not connected")
-
         try:
             symbol = self.device.symbol.query_by_name(name=symbol_name)
             self.device.breakpoint.enable(address=symbol.address)
@@ -577,39 +589,14 @@ class Trace32:
         while True:
             try:
                 command_type, args = self.command_queue.get(timeout=1.0)
-
-                if command_type == CommandType.READ:
-                    try:
-                        result = self.device.variable.read(args).value
-                        self.response_queue.put(result)
-                    except Exception as e:
-                        print(f"Error reading variable '{args}': {e}")
-                        self.response_queue.put(None)
-
-                elif command_type == CommandType.WRITE:
-                    try:
-                        symbol_name, value = args
-                        self.device.variable.write(symbol_name, value)
-                    except Exception as e:
-                        print(f"Error writing variable '{args[0]}': {e}")
-
-                elif command_type == CommandType.RESET:
-                    self.in_reset = True
-
-                elif command_type == CommandType.RESUME:
-                    self.in_reset = False
-
-                else:
-                    print(f"Unknown command type: {command_type}")
-
+                # .value를 사용하여 정수 비교 (더 빠름)
+                self._handlers.get(command_type.value, self._default)(args)
                 self.command_queue.task_done()
-
             except queue.Empty:
                 continue  # Normal timeout, continue loop
             except Exception as e:
                 print(f"Unexpected error in RCL worker: {e}")
                 break
-
         print("Trace32 RCL worker thread stopped")
 
     def disconnect(self):

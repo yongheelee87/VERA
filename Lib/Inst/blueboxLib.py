@@ -5,6 +5,12 @@ from typing import Any, Optional, Union
 import isystem.connect as ic
 from enum import IntEnum
 
+TYPE_CONVERT = {'b': 1,  # ic.SType.tUnsigned
+                'u': 1,  # ic.SType.tUnsigned
+                'i': 2,  # ic.SType.tSigned
+                'f': 3  # ic.SType.tFloat
+                }
+
 
 class CommandType(IntEnum):
     """Command type enumeration for worker thread"""
@@ -40,6 +46,7 @@ class BlueBox:
         self.exec: Optional[Any] = None
         self.data: Optional[Any] = None
         self.address: Optional[Any] = None
+        self.bp: Optional[Any] = None
         self.status = False
         self.wksFilePath = wks_path
 
@@ -54,6 +61,49 @@ class BlueBox:
 
         self.vars = self._get_inout_variables()
 
+        # 반복적으로 사용할 속성 및 함수 참조 캐싱
+        valType = ic.SType()
+        addr_get = self.address.getVariableAddress
+        data_read = self.data.readValue
+        data_write = self.data.writeValue
+        queue_put = self.response_queue.put
+
+        def read_handler(args):
+            try:
+                valType.m_byType = self.vars[args][0]
+                valType.m_byBitSize = int(self.vars[args][1] * 8)
+                address = addr_get(args).getAddress()
+                result = data_read(ic.IConnectDebug.fRealTime,
+                                   ic.maPhysicalTriCore,
+                                   address,
+                                   valType).getInt()
+                queue_put(result)
+            except Exception as e:
+                print(f"Error reading variable '{args}': {e}")
+                queue_put(None)
+
+        def write_handler(args):
+            try:
+                symbol_name, value = args
+                valType.m_byType = self.vars[args][0]
+                valType.m_byBitSize = int(self.vars[args][1] * 8)
+                address = addr_get(args).getAddress()
+                data_write(ic.IConnectDebug.fRealTime,
+                           ic.maPhysicalTriCore,
+                           address,
+                           ic.CValueType(valType, value))
+            except Exception as e:
+                print(f"Error writing variable '{args[0]}': {e}")
+
+        self._handlers = {
+            CommandType.READ: read_handler,
+            CommandType.WRITE: write_handler,
+            CommandType.RESET: lambda args: setattr(self, 'in_reset', True),
+            CommandType.RESUME: lambda args: setattr(self, 'in_reset', False),
+        }
+
+        self._default = lambda args: print(f"Unknown command type: {args}")
+
     def _get_inout_variables(self):
         varVector = ic.VariableVector()
         self.data.getVariables(0, varVector)
@@ -64,7 +114,10 @@ class BlueBox:
             VarData: ic.CVariable
             name = varData.getName()
             if name.startswith(('Drv', 'Est')):
-                variables[name] = varData.getSize()
+                data_type = TYPE_CONVERT.get(varData.getType()[0].lower())
+                if data_type is None:
+                    data_type = 1  # unsigned
+                variables[name] = (data_type, varData.getSize())
         return variables
 
     def _initialize_bluebox(self):
@@ -92,6 +145,7 @@ class BlueBox:
             self.exec = ic.CExecutionController(self.device)
             self.data = ic.CDataController(self.device)
             self.address = ic.CAddressController(self.device)
+            self.bp = ic.CBreakpointController(self.device)
 
             wksCtrl.open(self.wksFilePath)
 
@@ -214,55 +268,104 @@ class BlueBox:
 
         print(f"Warning: Command completion timeout after {timeout} seconds")
 
+    def set_breakpoint(self, symbol_name: str, bp_condition: str = '') -> bool:
+        """
+        Set breakpoint at symbol location
+
+        Args:
+            symbol_name: Symbol name for breakpoint
+            bp_condition: breakpoint condition
+
+        Returns:
+            True if successful
+        """
+        try:
+            bp_handle = self.bp.set_BP_symbol(symbol_name)
+            print(f"Breakpoint set at '{symbol_name}'")
+            if bp_condition != '':
+                self.bp.set_BP_condition(bp_handle, 1, bp_condition)
+                print(f"Condition '{bp_condition}' is set for breakpoint at '{symbol_name}'")
+            return True
+        except Exception as e:
+            error_msg = f"Failed to set breakpoint at '{symbol_name}': {e}"
+            print(error_msg)
+            raise BlueBoxError(error_msg)
+
+    def delete_breakpoint(self, symbol_name: str) -> bool:
+        """
+        Delete breakpoint at symbol location
+
+        Args:
+            symbol_name: Symbol name for breakpoint
+
+        Returns:
+            True if successful
+        """
+        try:
+            self.bp.deleteBP(symbol_name)
+            print(f"Breakpoint deleted at '{symbol_name}'")
+            return True
+        except Exception as e:
+            error_msg = f"Failed to delete breakpoint at '{symbol_name}': {e}"
+            print(error_msg)
+            raise BlueBoxError(error_msg)
+
+    def disable_breakpoint(self, symbol_name: str) -> bool:
+        """
+        Disable breakpoint at symbol location
+
+        Args:
+            symbol_name: Symbol name for breakpoint
+
+        Returns:
+            True if successful
+        """
+        try:
+            for bp in self.bp.get_BPs():
+                if bp.location() == symbol_name:
+                    self.bp.set_BP_enabled(bp, False)
+                    print(f"Breakpoint disabled at '{symbol_name}'")
+                    return True
+            return False
+        except Exception as e:
+            error_msg = f"Failed to disable breakpoint at '{symbol_name}': {e}"
+            print(error_msg)
+            raise BlueBoxError(error_msg)
+
+    def enable_breakpoint(self, symbol_name: str) -> bool:
+        """
+        Enable breakpoint at symbol location
+
+        Args:
+            symbol_name: Symbol name for breakpoint
+
+        Returns:
+            True if successful
+        """
+        try:
+            for bp in self.bp.get_BPs():
+                if bp.location() == symbol_name:
+                    self.bp.set_BP_enabled(bp, True)
+                    print(f"Breakpoint enabled at '{symbol_name}'")
+                    return True
+            return False
+        except Exception as e:
+            error_msg = f"Failed to enable breakpoint at '{symbol_name}': {e}"
+            print(error_msg)
+            raise BlueBoxError(error_msg)
+
     def _rcl_worker(self):
         """
         Worker thread for handling read/write commands
         Enhanced with better error handling and logging
         """
         print("BlueBox RCL worker thread started")
-        valType = ic.SType()
-        valType.m_byType = ic.SType.tUnsigned
-        valType.m_byBitSize = 0
 
         while True:
             try:
                 command_type, args = self.command_queue.get(timeout=1.0)
-
-                if command_type == CommandType.READ:
-                    try:
-                        valType.m_byBitSize = int(self.vars[args] * 8)
-                        address = self.address.getVariableAddress(args).getAddress()
-                        result = self.data.readValue(ic.IConnectDebug.fRealTime,
-                                                     ic.maPhysicalTriCore,
-                                                     address,
-                                                     valType).getInt()
-                        self.response_queue.put(result)
-                    except Exception as e:
-                        print(f"Error reading variable '{args}': {e}")
-                        self.response_queue.put(None)
-
-                elif command_type == CommandType.WRITE:
-                    try:
-                        symbol_name, value = args
-                        valType.m_byBitSize = int(self.vars[symbol_name] * 8)
-                        cval = ic.CValueType(valType, value)
-                        address = self.address.getVariableAddress(symbol_name).getAddress()
-                        self.data.writeValue(ic.IConnectDebug.fRealTime,
-                                             ic.maPhysicalTriCore,
-                                             address,
-                                             cval)
-                    except Exception as e:
-                        print(f"Error writing variable '{args[0]}': {e}")
-
-                elif command_type == CommandType.RESET:
-                    self.in_reset = True
-
-                elif command_type == CommandType.RESUME:
-                    self.in_reset = False
-
-                else:
-                    print(f"Unknown command type: {command_type}")
-
+                # .value를 사용하여 정수 비교 (더 빠름)
+                self._handlers.get(command_type.value, self._default)(args)
                 self.command_queue.task_done()
 
             except queue.Empty:

@@ -226,13 +226,8 @@ for i in tqdm(input_data,
         log_th.step = int(i[0])
         i[2] = None
         log_th.in_data = i[2:]
-        
-        
-        
-        
-        
-        
-        
+    
+    
     else:
 {write_msg}
 

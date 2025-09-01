@@ -1,5 +1,5 @@
 import pandas as pd
-from typing import List, Tuple, Any, Union
+from typing import List, Any, Union
 
 
 def find_out_signals_for_col(out_sigs: List[List[Any]]) -> List[str]:

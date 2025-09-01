@@ -270,9 +270,9 @@ def make_pjt_HTML(
         tc_in_out: 테스트 케이스 입출력 딕셔너리
         export_path: 내보내기 경로
     """
-    header =  f'<h1 style="font-family: \'Black Han Sans\', sans-serif;font-size: 2.5em;color: red;margin: 20px 0 10px 40px;>{project}</h1>'
+    header = f'<h1 style="font-family: \'Black Han Sans\', sans-serif;font-size: 2.5em;color: red;margin: 20px 0 10px 40px;>{project}</h1>'
     additional_header = f'<h2 style="font-family: \'Jua\', sans-serif;font-size: 1.0em;color: black;margin: 20px 0 10px 40px;">* SW 버전: {version}</h2>'
-    download_link =  f'<h2 style="font-family: \'Jua\', sans-serif;font-size: 1.0em;color: black;margin: 0 0 10px 40px;"><a href="./" style="text-decoration:none">테스트 원본 파일을 다운받으시려면 여기를 클릭해주세요</a></h2>'
+    download_link = f'<h2 style="font-family: \'Jua\', sans-serif;font-size: 1.0em;color: black;margin: 0 0 10px 40px;"><a href="./" style="text-decoration:none">테스트 원본 파일을 다운받으시려면 여기를 클릭해주세요</a></h2>'
 
     html_content = HTML_TEMPLATE_BASE.format(
         title=project,

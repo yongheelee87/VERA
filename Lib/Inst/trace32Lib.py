@@ -25,6 +25,10 @@ class CommandType(IntEnum):
     WRITE = 2
     RESET = 3
     RESUME = 4
+    SET_BREAKPOINT = 5
+    DELETE_BREAKPOINT = 6
+    DISABLE_BREAKPOINT = 7
+    ENABLE_BREAKPOINT = 8
 
 
 @dataclass(frozen=True)
@@ -158,6 +162,10 @@ class Trace32:
             CommandType.WRITE: self._handle_write,
             CommandType.RESET: self._handle_reset,
             CommandType.RESUME: self._handle_resume,
+            CommandType.SET_BREAKPOINT: self._handle_set_breakpoint,
+            CommandType.DELETE_BREAKPOINT: self._handle_delete_breakpoint,
+            CommandType.DISABLE_BREAKPOINT: self._handle_disable_breakpoint,
+            CommandType.ENABLE_BREAKPOINT: self._handle_enable_breakpoint,
         }
 
     def _handle_read(self, symbol_name: str) -> None:
@@ -190,6 +198,57 @@ class Trace32:
         """Thread-safe resume handler"""
         with self._reset_lock:
             self.in_reset = False
+
+    def _handle_set_breakpoint(self, symbol_name: str) -> None:
+        """Handler for setting breakpoints"""
+        try:
+            result = self._execute_breakpoint_operation_internal("set", symbol_name, "set")
+            self._cached_refs['queue_put'](result)
+        except Exception as e:
+            print(f"Error setting breakpoint at '{symbol_name}': {e}")
+            self._cached_refs['queue_put'](False)
+
+    def _handle_delete_breakpoint(self, symbol_name: str) -> None:
+        """Handler for deleting breakpoints"""
+        try:
+            result = self._execute_breakpoint_operation_internal("deleted", symbol_name, "delete")
+            self._cached_refs['queue_put'](result)
+        except Exception as e:
+            print(f"Error deleting breakpoint at '{symbol_name}': {e}")
+            self._cached_refs['queue_put'](False)
+
+    def _handle_disable_breakpoint(self, symbol_name: str) -> None:
+        """Handler for disabling breakpoints"""
+        try:
+            result = self._execute_breakpoint_operation_internal("disabled", symbol_name, "disable")
+            self._cached_refs['queue_put'](result)
+        except Exception as e:
+            print(f"Error disabling breakpoint at '{symbol_name}': {e}")
+            self._cached_refs['queue_put'](False)
+
+    def _handle_enable_breakpoint(self, symbol_name: str) -> None:
+        """Handler for enabling breakpoints"""
+        try:
+            result = self._execute_breakpoint_operation_internal("enabled", symbol_name, "enable")
+            self._cached_refs['queue_put'](result)
+        except Exception as e:
+            print(f"Error enabling breakpoint at '{symbol_name}': {e}")
+            self._cached_refs['queue_put'](False)
+
+    def _execute_breakpoint_operation_internal(self, operation: str, symbol_name: str, method_name: str) -> bool:
+        """Internal breakpoint operation handler for worker thread"""
+        try:
+            symbol_handler = self._cached_refs.get('symbol', self.device.symbol)
+            bp_handler = self._cached_refs.get('breakpoint', self.device.breakpoint)
+
+            symbol = symbol_handler.query_by_name(name=symbol_name)
+            method = getattr(bp_handler, method_name)
+            method(address=symbol.address)
+
+            print(f"Breakpoint {operation} at '{symbol_name}'")
+            return True
+        except Exception:
+            return False
 
     def _initialize_trace32(self) -> None:
         """Initialize Trace32 connection and worker thread"""
@@ -490,41 +549,86 @@ class Trace32:
             print(error_msg)
             raise Trace32Error(error_msg)
 
-    def _execute_breakpoint_operation(self, operation: str, symbol_name: str, method_name: str) -> bool:
-        """Common breakpoint operation handler"""
+    def set_breakpoint(self, symbol_name: str) -> bool:
+        """Set breakpoint at symbol location using worker thread"""
+        if not symbol_name or not symbol_name.strip():
+            raise ValueError("Symbol name cannot be empty")
+
         if not self.status:
             raise Trace32Error("Device not connected")
 
         try:
-            symbol_handler = self._cached_refs.get('symbol', self.device.symbol)
-            bp_handler = self._cached_refs.get('breakpoint', self.device.breakpoint)
-
-            symbol = symbol_handler.query_by_name(name=symbol_name)
-            method = getattr(bp_handler, method_name)
-            method(address=symbol.address)
-
-            print(f"Breakpoint {operation} at '{symbol_name}'")
-            return True
+            self.command_queue.put((CommandType.SET_BREAKPOINT, symbol_name), block=False)
+            result = self.response_queue.get(timeout=Trace32Constants.WORKER_RESPONSE_TIMEOUT)
+            return result if result is not None else False
+        except queue.Full:
+            raise Trace32Error(f"Command queue full - cannot set breakpoint at '{symbol_name}'")
+        except queue.Empty:
+            raise Trace32TimeoutError(f"Timeout setting breakpoint at '{symbol_name}'")
         except Exception as e:
-            error_msg = f"Failed to {operation} breakpoint at '{symbol_name}': {e}"
-            print(error_msg)
-            raise Trace32Error(error_msg)
-
-    def set_breakpoint(self, symbol_name: str) -> bool:
-        """Set breakpoint at symbol location"""
-        return self._execute_breakpoint_operation("set", symbol_name, "set")
+            raise Trace32Error(f"Failed to set breakpoint at '{symbol_name}': {e}")
 
     def delete_breakpoint(self, symbol_name: str) -> bool:
-        """Delete breakpoint at symbol location"""
-        return self._execute_breakpoint_operation("deleted", symbol_name, "delete")
+        """Delete breakpoint at symbol location using worker thread"""
+        if not symbol_name or not symbol_name.strip():
+            raise ValueError("Symbol name cannot be empty")
+
+        if not self.status:
+            raise Trace32Error("Device not connected")
+
+        try:
+            self.command_queue.put((CommandType.DELETE_BREAKPOINT, symbol_name), block=False)
+            result = self.response_queue.get(timeout=Trace32Constants.WORKER_RESPONSE_TIMEOUT)
+            return result if result is not None else False
+        except queue.Full:
+            raise Trace32Error(f"Command queue full - cannot delete breakpoint at '{symbol_name}'")
+        except queue.Empty:
+            raise Trace32TimeoutError(f"Timeout deleting breakpoint at '{symbol_name}'")
+        except Exception as e:
+            raise Trace32Error(f"Failed to delete breakpoint at '{symbol_name}': {e}")
 
     def disable_breakpoint(self, symbol_name: str) -> bool:
-        """Disable breakpoint at symbol location"""
-        return self._execute_breakpoint_operation("disabled", symbol_name, "disable")
+        """Disable breakpoint at symbol location using worker thread"""
+        if not symbol_name or not symbol_name.strip():
+            raise ValueError("Symbol name cannot be empty")
+
+        if not self.status:
+            raise Trace32Error("Device not connected")
+
+        try:
+            self.command_queue.put((CommandType.DISABLE_BREAKPOINT, symbol_name), block=False)
+            result = self.response_queue.get(timeout=Trace32Constants.WORKER_RESPONSE_TIMEOUT)
+            return result if result is not None else False
+        except queue.Full:
+            raise Trace32Error(f"Command queue full - cannot disable breakpoint at '{symbol_name}'")
+        except queue.Empty:
+            raise Trace32TimeoutError(f"Timeout disabling breakpoint at '{symbol_name}'")
+        except Exception as e:
+            raise Trace32Error(f"Failed to disable breakpoint at '{symbol_name}': {e}")
 
     def enable_breakpoint(self, symbol_name: str) -> bool:
-        """Enable breakpoint at symbol location"""
-        return self._execute_breakpoint_operation("enabled", symbol_name, "enable")
+        """Enable breakpoint at symbol location using worker thread"""
+        if not symbol_name or not symbol_name.strip():
+            raise ValueError("Symbol name cannot be empty")
+
+        if not self.status:
+            raise Trace32Error("Device not connected")
+
+        try:
+            self.command_queue.put((CommandType.ENABLE_BREAKPOINT, symbol_name), block=False)
+            result = self.response_queue.get(timeout=Trace32Constants.WORKER_RESPONSE_TIMEOUT)
+            return result if result is not None else False
+        except queue.Full:
+            raise Trace32Error(f"Command queue full - cannot enable breakpoint at '{symbol_name}'")
+        except queue.Empty:
+            raise Trace32TimeoutError(f"Timeout enabling breakpoint at '{symbol_name}'")
+        except Exception as e:
+            raise Trace32Error(f"Failed to enable breakpoint at '{symbol_name}': {e}")
+
+    def _execute_breakpoint_operation(self, operation: str, symbol_name: str, method_name: str) -> bool:
+        """Legacy method for backward compatibility - now deprecated"""
+        print(f"Warning: _execute_breakpoint_operation is deprecated. Use specific breakpoint methods instead.")
+        return self._execute_breakpoint_operation_internal(operation, symbol_name, method_name)
 
     def reinitialize(self) -> None:
         """Reinitialize target system with retry logic"""

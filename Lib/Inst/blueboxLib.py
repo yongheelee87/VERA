@@ -25,6 +25,10 @@ class CommandType(IntEnum):
     WRITE = 2
     RESET = 3
     RESUME = 4
+    SET_BREAKPOINT = 5
+    DELETE_BREAKPOINT = 6
+    DISABLE_BREAKPOINT = 7
+    ENABLE_BREAKPOINT = 8
 
 
 @dataclass(frozen=True)
@@ -121,6 +125,10 @@ class BlueBox:
             CommandType.WRITE: self._handle_write,
             CommandType.RESET: self._handle_reset,
             CommandType.RESUME: self._handle_resume,
+            CommandType.SET_BREAKPOINT: self._handle_set_breakpoint,
+            CommandType.DELETE_BREAKPOINT: self._handle_delete_breakpoint,
+            CommandType.DISABLE_BREAKPOINT: self._handle_disable_breakpoint,
+            CommandType.ENABLE_BREAKPOINT: self._handle_enable_breakpoint,
         }
 
     def _handle_read(self, symbol_name: str) -> None:
@@ -181,6 +189,66 @@ class BlueBox:
         """Thread-safe resume handler"""
         with self._reset_lock:
             self.in_reset = False
+
+    def _handle_set_breakpoint(self, args: Tuple[str, str]) -> None:
+        """Handler for setting breakpoints"""
+        try:
+            symbol_name, bp_condition = args
+            bp_handle = self.bp.set_BP_symbol(symbol_name)
+            print(f"Breakpoint set at '{symbol_name}'")
+
+            if bp_condition:
+                self.bp.set_BP_condition(bp_handle, 1, bp_condition)
+                print(f"Condition '{bp_condition}' set for breakpoint at '{symbol_name}'")
+
+            self._cached_refs['queue_put'](True)
+
+        except Exception as e:
+            print(f"Error setting breakpoint at '{args[0]}': {e}")
+            self._cached_refs['queue_put'](False)
+
+    def _handle_delete_breakpoint(self, symbol_name: str) -> None:
+        """Handler for deleting breakpoints"""
+        try:
+            self.bp.deleteBP(symbol_name)
+            print(f"Breakpoint deleted at '{symbol_name}'")
+            self._cached_refs['queue_put'](True)
+
+        except Exception as e:
+            print(f"Error deleting breakpoint at '{symbol_name}': {e}")
+            self._cached_refs['queue_put'](False)
+
+    def _handle_disable_breakpoint(self, symbol_name: str) -> None:
+        """Handler for disabling breakpoints"""
+        try:
+            bp = self._find_breakpoint_by_location(symbol_name)
+            if bp:
+                self.bp.set_BP_enabled(bp, False)
+                print(f"Breakpoint disabled at '{symbol_name}'")
+                self._cached_refs['queue_put'](True)
+            else:
+                print(f"No breakpoint found at '{symbol_name}'")
+                self._cached_refs['queue_put'](False)
+
+        except Exception as e:
+            print(f"Error disabling breakpoint at '{symbol_name}': {e}")
+            self._cached_refs['queue_put'](False)
+
+    def _handle_enable_breakpoint(self, symbol_name: str) -> None:
+        """Handler for enabling breakpoints"""
+        try:
+            bp = self._find_breakpoint_by_location(symbol_name)
+            if bp:
+                self.bp.set_BP_enabled(bp, True)
+                print(f"Breakpoint enabled at '{symbol_name}'")
+                self._cached_refs['queue_put'](True)
+            else:
+                print(f"No breakpoint found at '{symbol_name}'")
+                self._cached_refs['queue_put'](False)
+
+        except Exception as e:
+            print(f"Error enabling breakpoint at '{symbol_name}': {e}")
+            self._cached_refs['queue_put'](False)
 
     def _get_inout_variables(self) -> Dict[str, Tuple[int, float]]:
         """Optimized variable discovery with better filtering"""
@@ -313,6 +381,70 @@ class BlueBox:
             except Exception as e:
                 raise BlueBoxError(f"Failed to read symbol '{symbol}': {e}")
 
+    def set_breakpoint(self, symbol_name: str, bp_condition: str = '') -> bool:
+        """Set breakpoint at symbol location using worker thread"""
+        if not symbol_name or not symbol_name.strip():
+            raise ValueError("Symbol name cannot be empty")
+
+        try:
+            self.command_queue.put((CommandType.SET_BREAKPOINT, (symbol_name, bp_condition)), block=False)
+            result = self.response_queue.get(timeout=BlueBoxConstants.WORKER_RESPONSE_TIMEOUT)
+            return result if result is not None else False
+        except queue.Full:
+            raise BlueBoxError(f"Command queue full - cannot set breakpoint at '{symbol_name}'")
+        except queue.Empty:
+            raise BlueBoxTimeoutError(f"Timeout setting breakpoint at '{symbol_name}'")
+        except Exception as e:
+            raise BlueBoxError(f"Failed to set breakpoint at '{symbol_name}': {e}")
+
+    def delete_breakpoint(self, symbol_name: str) -> bool:
+        """Delete breakpoint at symbol location using worker thread"""
+        if not symbol_name or not symbol_name.strip():
+            raise ValueError("Symbol name cannot be empty")
+
+        try:
+            self.command_queue.put((CommandType.DELETE_BREAKPOINT, symbol_name), block=False)
+            result = self.response_queue.get(timeout=BlueBoxConstants.WORKER_RESPONSE_TIMEOUT)
+            return result if result is not None else False
+        except queue.Full:
+            raise BlueBoxError(f"Command queue full - cannot delete breakpoint at '{symbol_name}'")
+        except queue.Empty:
+            raise BlueBoxTimeoutError(f"Timeout deleting breakpoint at '{symbol_name}'")
+        except Exception as e:
+            raise BlueBoxError(f"Failed to delete breakpoint at '{symbol_name}': {e}")
+
+    def disable_breakpoint(self, symbol_name: str) -> bool:
+        """Disable breakpoint at symbol location using worker thread"""
+        if not symbol_name or not symbol_name.strip():
+            raise ValueError("Symbol name cannot be empty")
+
+        try:
+            self.command_queue.put((CommandType.DISABLE_BREAKPOINT, symbol_name), block=False)
+            result = self.response_queue.get(timeout=BlueBoxConstants.WORKER_RESPONSE_TIMEOUT)
+            return result if result is not None else False
+        except queue.Full:
+            raise BlueBoxError(f"Command queue full - cannot disable breakpoint at '{symbol_name}'")
+        except queue.Empty:
+            raise BlueBoxTimeoutError(f"Timeout disabling breakpoint at '{symbol_name}'")
+        except Exception as e:
+            raise BlueBoxError(f"Failed to disable breakpoint at '{symbol_name}': {e}")
+
+    def enable_breakpoint(self, symbol_name: str) -> bool:
+        """Enable breakpoint at symbol location using worker thread"""
+        if not symbol_name or not symbol_name.strip():
+            raise ValueError("Symbol name cannot be empty")
+
+        try:
+            self.command_queue.put((CommandType.ENABLE_BREAKPOINT, symbol_name), block=False)
+            result = self.response_queue.get(timeout=BlueBoxConstants.WORKER_RESPONSE_TIMEOUT)
+            return result if result is not None else False
+        except queue.Full:
+            raise BlueBoxError(f"Command queue full - cannot enable breakpoint at '{symbol_name}'")
+        except queue.Empty:
+            raise BlueBoxTimeoutError(f"Timeout enabling breakpoint at '{symbol_name}'")
+        except Exception as e:
+            raise BlueBoxError(f"Failed to enable breakpoint at '{symbol_name}': {e}")
+
     def reinitialize(self) -> None:
         """Reinitialize target system with retry logic"""
         for attempt in range(BlueBoxConstants.MAX_RETRIES):
@@ -345,29 +477,6 @@ class BlueBox:
         print(f"Warning: Command completion timeout after {timeout} seconds")
         return False
 
-    def set_breakpoint(self, symbol_name: str, bp_condition: str = '') -> bool:
-        """Set breakpoint at symbol location with improved error handling"""
-        try:
-            bp_handle = self.bp.set_BP_symbol(symbol_name)
-            print(f"Breakpoint set at '{symbol_name}'")
-
-            if bp_condition:
-                self.bp.set_BP_condition(bp_handle, 1, bp_condition)
-                print(f"Condition '{bp_condition}' set for breakpoint at '{symbol_name}'")
-
-            return True
-        except Exception as e:
-            raise BlueBoxError(f"Failed to set breakpoint at '{symbol_name}': {e}")
-
-    def delete_breakpoint(self, symbol_name: str) -> bool:
-        """Delete breakpoint at symbol location"""
-        try:
-            self.bp.deleteBP(symbol_name)
-            print(f"Breakpoint deleted at '{symbol_name}'")
-            return True
-        except Exception as e:
-            raise BlueBoxError(f"Failed to delete breakpoint at '{symbol_name}': {e}")
-
     def _find_breakpoint_by_location(self, symbol_name: str) -> Optional[Any]:
         """Find breakpoint by symbol location - optimized lookup"""
         try:
@@ -377,30 +486,6 @@ class BlueBox:
             return None
         except Exception:
             return None
-
-    def disable_breakpoint(self, symbol_name: str) -> bool:
-        """Disable breakpoint at symbol location"""
-        try:
-            bp = self._find_breakpoint_by_location(symbol_name)
-            if bp:
-                self.bp.set_BP_enabled(bp, False)
-                print(f"Breakpoint disabled at '{symbol_name}'")
-                return True
-            return False
-        except Exception as e:
-            raise BlueBoxError(f"Failed to disable breakpoint at '{symbol_name}': {e}")
-
-    def enable_breakpoint(self, symbol_name: str) -> bool:
-        """Enable breakpoint at symbol location"""
-        try:
-            bp = self._find_breakpoint_by_location(symbol_name)
-            if bp:
-                self.bp.set_BP_enabled(bp, True)
-                print(f"Breakpoint enabled at '{symbol_name}'")
-                return True
-            return False
-        except Exception as e:
-            raise BlueBoxError(f"Failed to enable breakpoint at '{symbol_name}': {e}")
 
     def _rcl_worker(self) -> None:
         """Optimized worker thread with better error handling and shutdown support"""
